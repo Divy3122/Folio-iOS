@@ -4,7 +4,7 @@
 |---|---|---|
 | Receipt Scanner & AI | Divy3122 | feature/receipt-scanner |
 | Return Reminders | BrandonH-12 | feature/return-reminders |
-| Receipt Storage | Unassigned | feature/receipt-storage |
+| Receipt Storage | zoinks-05 | feature/receipt-storage |
 | Spending Dashboard | Unassigned | feature/spending-dashboard |
 | Architecture & Integration | Unassigned | feature/app-integration |
 
