@@ -21,3 +21,9 @@ through pull requests.
 
 Only tested, stable releases are merged into main.
 
+
+## Shared foundation boundaries
+
+The assignments above are unchanged. Receipt Storage owns `Features/ReceiptLibrary`; scanner, dashboard and reminders use their corresponding feature folders. Architecture & Integration coordinates App/Core and shared Domain/Data contracts. Propose shared contract changes through a PR and notify affected owners. Unassigned roles remain unassigned until the team agrees otherwise.
+
+See [architecture](ARCHITECTURE.md) for service contracts and [contributing](../CONTRIBUTING.md) for branch setup. Each feature branch should merge the latest `origin/develop` before starting work; preserve existing commits and use PRs back to develop.
