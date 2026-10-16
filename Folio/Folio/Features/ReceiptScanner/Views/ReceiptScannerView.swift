@@ -1,86 +1,55 @@
-//
-//  ReceiptScannerView.swift
-//  Folio
-//
-//  Created by Divy Patel on 16/10/2026.
-//
-
-
 import SwiftUI
 import VisionKit
 
 struct ReceiptScannerView: View {
     @State private var viewModel = ReceiptScannerViewModel()
     @State private var showingCamera = false
+    @State private var confirmingNewScan = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    Button {
-                        if VNDocumentCameraViewController.isSupported {
-                            showingCamera = true
-                        } else {
-                            viewModel.reportUnsupportedCamera()
-                        }
-                    } label: {
-                        Label("Scan Receipt", systemImage: "doc.viewfinder")
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(viewModel.isProcessing)
-
-                    if viewModel.isProcessing {
-                        ProgressView("Recognising receipt text...")
-                    }
-
-                    if let error = viewModel.errorMessage {
-                        Text(error)
-                            .foregroundStyle(.red)
-                            .accessibilityAddTraits(.updatesFrequently)
-                    }
-
-                    if !viewModel.extractedText.isEmpty {
-                        Text("\(viewModel.pageCount) page(s) scanned")
-                            .font(.headline)
-
-                        Text("Recognised text — not yet verified")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-
-                        TextEditor(text: $viewModel.extractedText)
-                            .frame(minHeight: 300)
-                            .padding(8)
-                            .background(.regularMaterial)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
+            ReceiptCostReviewView(viewModel: viewModel)
+                .navigationTitle("Receipt Review")
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            if viewModel.hasReview { confirmingNewScan = true }
+                            else { openCamera() }
+                        } label: { Label("Scan Receipt", systemImage: "doc.viewfinder") }
+                        .disabled(viewModel.isProcessing)
                     }
                 }
-                .padding()
-            }
-            .navigationTitle("Receipt Scanner")
-            .sheet(isPresented: $showingCamera) {
-                ReceiptDocumentCamera(
-                    onScan: { pages in
-                        showingCamera = false
-
-                        Task {
-                            await viewModel.process(pages: pages)
+                .confirmationDialog("Replace this review with a new scan?", isPresented: $confirmingNewScan, titleVisibility: .visible) {
+                    Button("Scan a new receipt", role: .destructive, action: openCamera)
+                } message: {
+                    Text("A completed new scan replaces the current local draft and its images. Cancelling the camera keeps this review.")
+                }
+                .sheet(isPresented: $showingCamera) {
+                    ReceiptDocumentCamera(
+                        onScan: { pages in
+                            showingCamera = false
+                            viewModel.startProcessing(pages: pages)
+                        },
+                        onCancel: { showingCamera = false },
+                        onError: { error in
+                            showingCamera = false
+                            viewModel.reportError(error)
                         }
-                    },
-                    onCancel: {
-                        showingCamera = false
-                    },
-                    onError: { error in
-                        showingCamera = false
-                        viewModel.reportError(error)
-                    }
-                )
-            }
+                    )
+                }
+                .task { await viewModel.restoreDraft() }
+                .onChange(of: scenePhase) { _, phase in
+                    if phase != .active { Task { await viewModel.saveDraft() } }
+                }
+                .onDisappear { Task { await viewModel.saveDraft() } }
         }
+    }
+
+    private func openCamera() {
+        if VNDocumentCameraViewController.isSupported { showingCamera = true }
+        else { viewModel.reportUnsupportedCamera() }
     }
 }
 
-#Preview {
-    ReceiptScannerView()
-}
+#Preview { ReceiptScannerView() }

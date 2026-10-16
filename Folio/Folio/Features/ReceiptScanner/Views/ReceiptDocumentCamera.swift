@@ -28,7 +28,8 @@ struct ReceiptDocumentCamera: UIViewControllerRepresentable {
         Coordinator(self)
     }
 
-    final class Coordinator: NSObject, VNDocumentCameraViewControllerDelegate {
+    @MainActor
+    final class Coordinator: NSObject, @preconcurrency VNDocumentCameraViewControllerDelegate {
         private let parent: ReceiptDocumentCamera
 
         init(_ parent: ReceiptDocumentCamera) {

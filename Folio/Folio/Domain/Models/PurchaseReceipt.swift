@@ -47,4 +47,5 @@ struct ReceiptExtractionResult: Sendable {
     var candidate: PurchaseReceipt?
     var source: Source
     var reviewWarnings: [String]
+    var costBreakdown: ReceiptCostBreakdown? = nil
 }
