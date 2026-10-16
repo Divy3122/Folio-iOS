@@ -45,7 +45,9 @@ actor FoundationModelsReceiptExtractor: ReceiptExtracting {
     func extract(text: String) async throws -> ReceiptExtractionResult {
         try Task.checkCancellation()
         if let reason = unavailableReason() {
-            return ReceiptExtractionMapper.combine([], rawText: text, warnings: [reason])
+            return VerifiedReceiptOCRRecovery.recoverIfComplete(
+                ReceiptExtractionMapper.combine([], rawText: text, warnings: [reason]), from: text
+            )
         }
         var parts: [ReceiptExtractionMapper.Mapped] = []
         var warnings: [String] = []
@@ -62,6 +64,8 @@ actor FoundationModelsReceiptExtractor: ReceiptExtracting {
                 warnings.append("Automatic extraction failed for OCR lines \(chunk.startLine)–\(chunk.startLine + chunk.lines.count - 1). Review these lines manually; OCR and scans are unchanged.")
             }
         }
-        return ReceiptExtractionMapper.combine(parts, rawText: text, warnings: warnings)
+        return VerifiedReceiptOCRRecovery.recoverIfComplete(
+            ReceiptExtractionMapper.combine(parts, rawText: text, warnings: warnings), from: text
+        )
     }
 }

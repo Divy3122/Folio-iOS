@@ -44,6 +44,19 @@ final class ReceiptScannerViewModel {
     var warnings: [String] { extractionWarnings + ReceiptCostValidator.warnings(for: review) }
     var hasReview: Bool { hasDraftSession || !originalPages.isEmpty || !extractedText.isEmpty || !review.products.isEmpty }
 
+    func beginManualReceipt() {
+        guard !isProcessing else { return }
+        editRevision += 1
+        hasDraftSession = true
+        originalPages = []
+        pageCount = 0
+        extractedText = ""
+        errorMessage = nil
+        extractionWarnings = []
+        apply(ReceiptReviewDraft())
+        scheduleSave()
+    }
+
     func addProduct() { review.products.append(.init()) }
     func removeProduct(id: UUID) { review.products.removeAll { $0.id == id } }
 
