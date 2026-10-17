@@ -9,7 +9,7 @@ import Foundation
 
 /// An example change-of-mind policy the user can pick and then confirm.
 /// These are samples only — not statements of a retailer's actual policy or the user's legal rights.
-struct RetailerPolicyTemplate: Identifiable, Equatable, Sendable {
+struct RetailerPolicyTemplate: Identifiable, Equatable, Hashable, Sendable {
     var id: String { retailerName }
     let retailerName: String
     let windowDays: Int
