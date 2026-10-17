@@ -26,16 +26,6 @@ enum VerifiedReceiptOCRRecovery {
         "APPETIZERS", "ITEMS", "PRODUCTS", "GROCERIES", "BEVERAGES",
         "SNACKS", "MERCHANDISE"
     ]
-    private static let disallowedPrefixes = [
-        "TOTAL", "SUBTOTAL", "SUB TOTAL", "VAT", "GST", "TAX", "CASH",
-        "CHANGE", "PAYMENT", "PAID", "TENDER", "EFTPOS", "VISA",
-        "MASTERCARD", "DEBIT", "CREDIT", "LOYALTY", "REWARD", "POINTS",
-        "SAVING", "DISCOUNT", "ROUNDING", "BALANCE", "AMOUNT DUE",
-        "FEE", "SURCHARGE", "AUTH", "TRANSACTION", "RECEIPT", "INVOICE",
-        "DATE", "TIME", "TABLE", "SERVER", "TEL", "PHONE", "ADDRESS",
-        "ABN", "VAT NO", "VAT REG", "PAGE", "THANK YOU", "ORDER NO"
-    ]
-
     private static func amountPair(_ raw: String) -> (label: String, amount: Decimal)? {
         let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let range = NSRange(line.startIndex..<line.endIndex, in: line)
@@ -49,15 +39,7 @@ enum VerifiedReceiptOCRRecovery {
     }
 
     private static func safeProductName(_ raw: String) -> Bool {
-        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let upper = name.uppercased()
-        guard name.rangeOfCharacter(from: .letters) != nil,
-              !headings.contains(upper), !upper.hasPrefix("PAGE "),
-              !upper.hasPrefix("HTTP"), !upper.contains("@") else { return false }
-        return !disallowedPrefixes.contains { word in
-            upper == word || upper.hasPrefix(word + " ") ||
-            upper.hasPrefix(word + ":") || upper.hasPrefix(word + "(")
-        }
+        ReceiptOCRRowKind.classify(raw) == .product
     }
 
     private static func product(_ raw: String, amount: Decimal) -> ReceiptCostBreakdown.Product? {
@@ -249,7 +231,10 @@ enum VerifiedReceiptOCRRecovery {
         }
         merged.subtotal = merged.subtotal ?? recovered.subtotal
         merged.tax = merged.tax ?? recovered.tax
-        merged.total = merged.total ?? recovered.total
+        let totalConflict = result.reviewWarnings.contains {
+            $0.localizedCaseInsensitiveContains("conflicting") && $0.localizedCaseInsensitiveContains("total")
+        }
+        if !totalConflict { merged.total = merged.total ?? recovered.total }
 
         // Explicit 'subtotal excluding VAT' plus 'subtotal + VAT = total'
         // outranks the language model's guessed tax-treatment label.

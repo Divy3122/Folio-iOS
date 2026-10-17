@@ -338,3 +338,271 @@ extension ReceiptExtractionTests {
         #expect(try await store.load()?.review.total == "")
     }
 }
+
+extension ReceiptExtractionTests {
+    @Test func mapperPreservesOCRPriceDespiteQuoteFormatting() throws {
+        let text = "WOVEN BAG   $12,50"
+        let value = generated([product("Woven Bag", 1, "Woven Bag 12.50", cost: "12.50")])
+        let costs = try #require(result(value, text).costBreakdown)
+        #expect(costs.products.first?.lineTotal == Decimal(string: "12.50"))
+    }
+
+    @Test func mapperUsesNearbyPriceWithoutBorrowingNextProduct() throws {
+        let text = "WOVEN BAG\n$12,50\nGLASS JAR $4.00"
+        let value = generated([product("WOVEN BAG", 1, "WOVEN BAG", cost: "12.50")])
+        #expect(result(value, text).costBreakdown?.products.first?.lineTotal == Decimal(string: "12.50"))
+        let unsupported = generated([product("WOVEN BAG", 1, "WOVEN BAG", cost: "4.00")])
+        #expect(result(unsupported, text).costBreakdown?.products.first?.lineTotal == nil)
+    }
+
+    @Test @MainActor func printedTotalAndProductReachReviewDespiteMismatch() async {
+        let text = "WOVEN BAG $12,50\nGLASS JAR $4.00\nSUBTOTAL $20.00\nSETTLED\n$16,50"
+        var value = generated([
+            product("WOVEN BAG", 2, "WOVEN BAG", cost: "12.50"),
+            product("GLASS JAR", 3, "GLASS JAR", cost: "4.00")
+        ], total: amount("16.50", "Settled 16.50"))
+        value.subtotal = amount("20.00", "SUBTOTAL 20.00")
+        let fixture = value
+        let extractor = FoundationModelsReceiptExtractor(unavailableReason: { nil }, generate: { _ in fixture })
+        let model = ReceiptScannerViewModel(recognizer: FixtureRecognizer(), extractor: extractor, draftStore: nil)
+        await model.process(pages: [Data(text.utf8)])
+        #expect(model.review.products.map(\.lineTotal) == ["12.5", "4"])
+        #expect(model.review.total == "16.5")
+        #expect(model.review.subtotal == "20")
+        #expect(!ReceiptCostValidator.warnings(for: model.review).isEmpty)
+    }
+
+    @Test func recoveryCannotResolvePreviouslyConflictingTotals() {
+        let text = "ITEM ONE 3.00\nITEM TWO 4.00\nTOTAL 7.00"
+        for warning in ["Conflicting final total values were found across pages.",
+                        "Conflicting printed final-total candidates require review."] {
+            let original = ReceiptExtractionResult(rawText: text, candidate: nil, source: .foundationModels,
+                reviewWarnings: [warning], costBreakdown: ReceiptCostBreakdown())
+            let recovered = VerifiedReceiptOCRRecovery.recoverIfComplete(original, from: text)
+            #expect(recovered.costBreakdown?.total == nil)
+        }
+    }
+
+    @Test func existingFocusedRetryStillFillsMissingPrice() async throws {
+        let text = "WOVEN BAG $12.50\nSETTLED $12.50"
+        let fixture = generated([product("WOVEN BAG", 1, "WOVEN BAG", cost: nil)],
+                                total: amount("12.50", "SETTLED 12.50"))
+        let extractor = FoundationModelsReceiptExtractor(unavailableReason: { nil }, generate: { _ in fixture },
+            generateFocused: { _ in
+                [.init(sourceLine: 1, name: "WOVEN BAG", quantity: nil, lineTotal: "12.50", evidence: "WOVEN BAG")]
+            })
+        let extracted = try await extractor.extract(text: text)
+        #expect(extracted.costBreakdown?.products.first?.lineTotal == Decimal(string: "12.50"))
+        #expect(extracted.costBreakdown?.total == Decimal(string: "12.50"))
+    }
+}
+
+extension ReceiptExtractionTests {
+    @Test @MainActor func metadataAndBlankTipPipeline() async {
+        let text = """
+        Rainbow Roll         $15.95
+        Spider Roll          $14.95
+        750ml Hakutsuru      $39.95
+
+        SUB-TOTAL            $70.85
+        TAX                   $5.31
+
+        PAYMENT TYPE         VISA Card
+        APP#                 11278860
+        REF#                 18623058
+        REC#                 0018
+
+        TOTAL DUE            $76.16
+
+        TIP                  ______
+        TOTAL                ______
+        """
+        let proposals = [
+            product("Rainbow Roll", 2, "Rainbow Roll 15.95", cost: "15.95"),
+            product("Spider Roll", 3, "Spider Roll 14.95", cost: "14.95"),
+            product("750ml Hakutsuru", 4, "750ml Hakutsuru 39.95", cost: "39.95"),
+            product("SUB-TOTAL", 6, "SUB-TOTAL", cost: "70.85"),
+            product("TAX", 7, "TAX", cost: "5.31"),
+            product("PAYMENT TYPE", 9, "PAYMENT TYPE"),
+            product("APP#", 10, "APP#", cost: "11278860"),
+            product("REF#", 11, "REF#", cost: "18623058"),
+            product("REC#", 12, "REC#", cost: "0018"),
+            product("TOTAL DUE", 14, "TOTAL DUE", cost: "76.16"),
+            product("TIP", 16, "TIP"), product("TOTAL", 17, "TOTAL")
+        ]
+        var initial = generated(proposals)
+        initial.taxTreatment = .added
+        let fixture = initial
+        let extractor = FoundationModelsReceiptExtractor(unavailableReason: { nil }, generate: { prompt in
+            var value = fixture
+            let numberedLines = prompt.components(separatedBy: .newlines)
+            value.products = fixture.products.filter { item in
+                numberedLines.contains { $0.hasPrefix("\(item.sourceLine): ") }
+            }
+            value.subtotal = prompt.contains("6: SUB-TOTAL") ? .init(printed: "70.85", evidence: "SUB TOTAL 70.85") : nil
+            value.tax = prompt.contains("7: TAX") ? .init(printed: "5.31", evidence: "TAX 5.31") : nil
+            value.total = prompt.contains("17: TOTAL") ? .init(printed: "76.16", evidence: "TOTAL ______") : nil
+            return value
+        }, generateFocused: { _ in
+            [.init(sourceLine: 10, name: "APP#", quantity: nil, lineTotal: "11278860", evidence: "APP#")]
+        }, generateTotals: { _ in
+            [.init(role: .finalTotal, sourceLine: 14, printedAmount: "76.16"),
+             .init(role: .finalTotal, sourceLine: 17, printedAmount: "99.00")]
+        })
+        let model = ReceiptScannerViewModel(recognizer: FixtureRecognizer(), extractor: extractor, draftStore: nil)
+        await model.process(pages: [Data(text.utf8)])
+        #expect(model.review.products.map(\.name) == ["Rainbow Roll", "Spider Roll", "750ml Hakutsuru"])
+        #expect(model.review.products.map(\.lineTotal) == ["15.95", "14.95", "39.95"])
+        #expect(model.review.subtotal == "70.85")
+        #expect(model.review.tax == "5.31")
+        #expect(model.review.total == "76.16")
+        #expect(model.extractionWarnings.isEmpty)
+        #expect(ReceiptCostValidator.warnings(for: model.review).isEmpty)
+    }
+
+    @Test @MainActor func wrappedRestaurantPipeline() async {
+        let text = "Roasted Vegetable\nFlatbread 2 x €6,25 €12,50\nSparkling Water €3,50\nSUBTOTAL €16,00\nVAT €3,20\nPAYABLE €19,20"
+        var value = generated([
+            product("Roasted Vegetable Flatbread", 2, "Roasted Vegetable Flatbread", quantity: "2", unit: "6.25", cost: "12.50"),
+            product("Sparkling Water", 4, "Sparkling Water 3.50", cost: "3.50")
+        ])
+        value.subtotal = amount("16.00", "SUBTOTAL 16.00")
+        value.tax = amount("3.20", "VAT 3.20")
+        value.taxTreatment = .added
+        let fixture = value
+        let extractor = FoundationModelsReceiptExtractor(unavailableReason: { nil }, generate: { _ in fixture },
+            generateTotals: { _ in [.init(role: .finalTotal, sourceLine: 7, printedAmount: "19.20")] })
+        let model = ReceiptScannerViewModel(recognizer: FixtureRecognizer(), extractor: extractor, draftStore: nil)
+        await model.process(pages: [Data(text.utf8)])
+        #expect(model.review.products.map(\.lineTotal) == ["12.5", "3.5"])
+        #expect(model.review.products.first?.quantity == "2")
+        #expect(model.review.total == "19.2")
+        #expect(model.extractionWarnings.isEmpty)
+        #expect(ReceiptCostValidator.warnings(for: model.review).isEmpty)
+    }
+
+    @Test @MainActor func neighbouringPriceAndConflictingTotalsPipeline() async {
+        let text = "Linen Napkin\nGlass Bowl 4.00\nTOTAL 4.00\nTOTAL 8.00"
+        let fixture = generated([
+            product("Linen Napkin", 2, "Linen Napkin", cost: "4.00"),
+            product("Glass Bowl", 3, "Glass Bowl", cost: "4.00")
+        ])
+        let extractor = FoundationModelsReceiptExtractor(unavailableReason: { nil }, generate: { _ in fixture },
+            generateFocused: { _ in [.init(sourceLine: 2, name: "Linen Napkin", quantity: nil, lineTotal: "4.00", evidence: "Linen Napkin")] },
+            generateTotals: { _ in [.init(role: .finalTotal, sourceLine: 4, printedAmount: "4.00"),
+                                    .init(role: .finalTotal, sourceLine: 5, printedAmount: "8.00")] })
+        let model = ReceiptScannerViewModel(recognizer: FixtureRecognizer(), extractor: extractor, draftStore: nil)
+        await model.process(pages: [Data(text.utf8)])
+        #expect(model.review.products.map(\.lineTotal) == ["", "4"])
+        #expect(model.review.total.isEmpty)
+        #expect(model.extractionWarnings.contains { $0.contains("Conflicting") })
+    }
+}
+
+extension ReceiptExtractionTests {
+    @Test @MainActor func sixProductsSurviveIncorrectAnchorsAndMultipliedPrice() async {
+        let text = """
+        THE WILLOW FORK BISTRO
+        STARTERS
+        Garlic Bread x2 € 7,80
+        Crispy Calamari £6,50
+        MAINS
+        Pan-Seared Salmon w/ New Potatoes £17,90
+        Ribeye Steak (10oz) w/ Peppercorn Sauce 21,50
+        DRINKS
+        House Red (175ml) x2 £11,00
+        Still Water (750ml) £1,50
+        Subtotal (excl. VAT): 66,20
+        VAT (20%): 13,24
+        Total: 79,44
+        Payment Method Visa Credit
+        Auth Code 542893
+        """
+        #expect(ReceiptOCRChunk.split("Page 1\n" + text).count == 1)
+        var value = generated([
+            product("Garlic Bread", 3, "Garlic Bread x2 € 7,80", quantity: "2", unit: "7.80", cost: "15,60"),
+            product("Crispy Calamari", 5, "Crispy Calamari", cost: "6.50"),
+            product("Pan-Seared Salmon", 7, "Pan-Seared Salmon", cost: "17.90"),
+            product("Ribeye Steak", 8, "Ribeye Steak", cost: "21.50"),
+            product("House Red", 10, "House Red", quantity: "2", cost: "11.00"),
+            product("Still Water", 10, "Still Water (750ml)", cost: "1.50"),
+            product("DRINKS", 9, "DRINKS"), product("Auth Code", 16, "Auth Code", cost: "542893")
+        ])
+        value.taxTreatment = .added
+        let fixture = value
+        let extractor = FoundationModelsReceiptExtractor(unavailableReason: { nil }, generate: { _ in fixture },
+            generateTotals: { _ in [
+                .init(role: .subtotal, sourceLine: 11, printedAmount: "£66.20", evidence: "Subtotal (excl. VAT): 66.20"),
+                .init(role: .tax, sourceLine: 12, printedAmount: "€13.24", evidence: "VAT (20%): 13.24"),
+                .init(role: .finalTotal, sourceLine: 13, printedAmount: "£79.44", evidence: "Total: 79.44")
+            ] })
+        let model = ReceiptScannerViewModel(recognizer: FixtureRecognizer(), extractor: extractor, draftStore: nil)
+        await model.process(pages: [Data(text.utf8)])
+        #expect(model.review.products.map(\.name) == ["Garlic Bread", "Crispy Calamari", "Pan-Seared Salmon", "Ribeye Steak", "House Red", "Still Water"])
+        #expect(model.review.products.map(\.lineTotal) == ["7.8", "6.5", "17.9", "21.5", "11", "1.5"])
+        #expect(model.review.products.first?.quantity == "2")
+        #expect(model.review.products[4].quantity == "2")
+        #expect(model.review.products[0].unitPrice.isEmpty)
+        #expect(model.review.subtotal == "66.2")
+        #expect(model.review.tax == "13.24")
+        #expect(model.review.total == "79.44")
+    }
+
+    @Test func incorrectAnchorPreservesIdentityButNotInventedAmount() throws {
+        let text = "DRINKS\nSparkling Pear 3,20\nFresh Mint 1,00"
+        let value = generated([product("Sparkling Pear", 1, "Sparkling Pear", cost: "6.40")])
+        let costs = try #require(result(value, text).costBreakdown)
+        #expect(costs.products.map(\.name) == ["Sparkling Pear"])
+        #expect(costs.products.first?.lineTotal == nil)
+    }
+
+    @Test func longContextRetainsCoverageAndDeduplicates() {
+        let text = (1...120).map { "Item \($0) 2.00" }.joined(separator: "\n") + "\nPage 2\nSETTLED 240.00"
+        let chunks = ReceiptOCRChunk.split(text)
+        #expect(chunks.count > 1)
+        let mapped = chunks.map { chunk in
+            let products = chunk.lines.enumerated().compactMap { offset, row -> GeneratedReceiptProduct? in
+                guard row.hasPrefix("Item ") else { return nil }
+                return product(String(row.dropLast(5)), chunk.startLine + offset, row, cost: "2.00")
+            }
+            return ReceiptExtractionMapper.map(generated(products), chunk: chunk)
+        }
+        let combined = ReceiptExtractionMapper.combine(mapped, rawText: text)
+        #expect(combined.costBreakdown?.products.count == 120)
+        #expect(chunks.last?.lines.last == "SETTLED 240.00")
+        #expect(chunks.allSatisfy { $0.numberedText.utf8.count <= ReceiptOCRChunk.inputBudget })
+    }
+}
+
+extension ReceiptExtractionTests {
+    @Test @MainActor func unfamiliarMultipageLayoutKeepsPrintedTotalBeforeProducts() async {
+        let first = "SETTLED €999,00\nVAT INCLUDED €1,00\n" + (1...40).map { "Course \($0) €2,00" }.joined(separator: "\n")
+        let second = (41...80).map { "Course \($0) €2,00" }.joined(separator: "\n") + "\nPAYMENT TYPE CARD\nREF# 123456"
+        let empty = generated()
+        let extractor = FoundationModelsReceiptExtractor(unavailableReason: { nil }, generate: { prompt in
+            var value = empty
+            value.products = prompt.components(separatedBy: .newlines).compactMap { row in
+                let fields = row.split(separator: ":", maxSplits: 1)
+                guard fields.count == 2, let line = Int(fields[0]) else { return nil }
+                let content = fields[1].trimmingCharacters(in: .whitespaces)
+                guard content.hasPrefix("Course "), let separator = content.range(of: " €") else { return nil }
+                return .init(sourceLine: line, name: String(content[..<separator.lowerBound]),
+                    evidence: content, quantity: nil, unitPrice: nil, lineTotal: "2.00", discount: nil, isReturn: false)
+            }
+            value.taxTreatment = .included
+            return value
+        }, generateTotals: { _ in [
+            .init(role: .finalTotal, sourceLine: 1, printedAmount: "£999.00", evidence: "SETTLED 999.00"),
+            .init(role: .tax, sourceLine: 2, printedAmount: "1.00", evidence: "VAT INCLUDED 1.00")
+        ] })
+        let model = ReceiptScannerViewModel(recognizer: FixtureRecognizer(), extractor: extractor, draftStore: nil)
+        await model.process(pages: [Data(first.utf8), Data(second.utf8)])
+        #expect(model.review.products.count == 80)
+        #expect(Set(model.review.products.map(\.name)).count == 80)
+        #expect(model.review.products.allSatisfy { $0.lineTotal == "2" })
+        #expect(model.review.total == "999")
+        #expect(model.review.tax == "1")
+        #expect(model.originalPages.count == 2)
+        #expect(!ReceiptCostValidator.warnings(for: model.review).isEmpty)
+    }
+}
