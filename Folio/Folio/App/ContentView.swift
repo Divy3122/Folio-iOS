@@ -15,21 +15,24 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var model = AppViewModel()
+
     var body: some View {
-        NavigationStack {
-            Group {
-                if let message = model.errorMessage {
+        Group {
+            if let message = model.errorMessage {
+                NavigationStack {
                     ContentUnavailableView {
                         Label("Local storage unavailable", systemImage: "externaldrive.badge.exclamationmark")
-                    } description: { Text(message) } actions: {
+                    } description: {
+                        Text(message)
+                    } actions: {
                         Button("Try again", action: model.load)
                     }
-                } else {
-                    ContentUnavailableView("Welcome to Folio", systemImage: "receipt",
-                        description: Text("Your private receipt library. Feature modules are being prepared."))
+                    .navigationTitle("Folio")
                 }
+            } else {
+                // Temporary scanner integration for testing camera and extraction flow
+                ReceiptScannerView()
             }
-            .navigationTitle("Folio")
         }
         .task { model.load() }
     }
