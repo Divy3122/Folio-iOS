@@ -8,6 +8,8 @@ actor ReceiptScannerDraftStore {
         var pages: [Data]
         var review: ReceiptReviewDraft
         var extractionWarnings: [String]
+        /// Optional for backward-compatible decoding of existing version-1 drafts.
+        var ocrEvidence: [ReceiptOCRPage]? = nil
     }
 
     private let url: URL

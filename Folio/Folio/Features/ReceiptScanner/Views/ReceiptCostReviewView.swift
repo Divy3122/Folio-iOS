@@ -140,6 +140,19 @@ struct ReceiptCostReviewView: View {
                 }
                 Text("Check extracted values against your receipt before saving.")
                     .font(.footnote).foregroundStyle(.secondary)
+                #if DEBUG
+                DisclosureGroup("Debug pipeline report (test builds only)") {
+                    Text(viewModel.pipelineDebugReport)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                    ShareLink(item: viewModel.pipelineDebugReport) {
+                        Label("Share diagnostics", systemImage: "square.and.arrow.up")
+                    }
+                    Text("Contains receipt product information. Remove or redact personal data before sharing.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                #endif
                 DisclosureGroup("Original OCR text") {
                     Text(viewModel.extractedText.isEmpty ? "No readable OCR text. Refer to the original scans." : viewModel.extractedText)
                         .font(.callout.monospaced())
@@ -194,3 +207,4 @@ struct ReceiptCostReviewView: View {
 #Preview {
     ReceiptCostReviewView(viewModel: ReceiptScannerViewModel(draftStore: nil))
 }
+

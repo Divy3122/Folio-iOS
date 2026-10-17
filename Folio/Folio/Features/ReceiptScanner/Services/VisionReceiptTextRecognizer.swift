@@ -20,15 +20,15 @@ enum ScannerError: LocalizedError {
     }
 }
 
-/// Adapted from the supplied camera-reciept-test project's ReceiptOCR.
-/// Retains Folio's shared single-image protocol and spatial row reconstruction.
-/// Receipts with multiple pages are handled by ReceiptScannerViewModel.
-actor VisionReceiptTextRecognizer: ReceiptTextRecognizing {
+/// Captures original Vision evidence while keeping the existing string contract.
+/// No extra OCR requests are needed: one Vision pass produces both outputs.
+actor VisionReceiptTextRecognizer: ReceiptEvidenceRecognizing {
     func recognize(imageData: Data) async throws -> String {
-        try Task.checkCancellation()
+        try await recognizeEvidence(imageData: imageData).text
+    }
 
-        // The reference scanner passes a CGImage AND its original orientation
-        // to Vision. Doing both avoids text being read sideways or upside down.
+    func recognizeEvidence(imageData: Data) async throws -> ReceiptOCRPage {
+        try Task.checkCancellation()
         guard let image = UIImage(data: imageData),
               let cgImage = image.cgImage else {
             throw ScannerError.imageConversionFailed
@@ -52,65 +52,26 @@ actor VisionReceiptTextRecognizer: ReceiptTextRecognizing {
         request.usesLanguageCorrection = true
         request.automaticallyDetectsLanguage = true
 
-        // Same CGImage + orientation Vision API as the supplied application.
-        // The surrounding Folio actor already runs off the main actor.
-        let handler = VNImageRequestHandler(
-            cgImage: cgImage,
-            orientation: orientation
-        )
+        let handler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation)
         try handler.perform([request])
         try Task.checkCancellation()
 
-        // Folio previously needed spatial reconstruction to keep item names
-        // beside their right-aligned prices. Keep this proven behaviour.
-        struct Fragment {
-            let text: String
-            let x: CGFloat
-            let y: CGFloat
-            let height: CGFloat
-        }
-        struct Row {
-            var y: CGFloat
-            var height: CGFloat
-            var fragments: [Fragment]
-        }
-
-        let fragments: [Fragment] = (request.results ?? []).compactMap { observation in
-            guard let candidate = observation.topCandidates(1).first else {
-                return nil
+        let fragments: [ReceiptOCRFragment] = (request.results ?? []).compactMap { observation in
+            let candidates = observation.topCandidates(3).compactMap { candidate -> ReceiptOCRCandidate? in
+                let text = candidate.string.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { return nil }
+                return ReceiptOCRCandidate(text: text, confidence: Double(candidate.confidence))
             }
-            let text = candidate.string.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return nil }
-            return Fragment(
-                text: text,
-                x: observation.boundingBox.minX,
-                y: observation.boundingBox.midY,
-                height: observation.boundingBox.height
+            guard !candidates.isEmpty else { return nil }
+            let rect = observation.boundingBox
+            return ReceiptOCRFragment(
+                box: ReceiptOCRBox(
+                    x: Double(rect.minX), y: Double(rect.minY),
+                    width: Double(rect.width), height: Double(rect.height)
+                ),
+                candidates: candidates
             )
-        }.sorted { lhs, rhs in
-            if abs(lhs.y - rhs.y) < 0.002 { return lhs.x < rhs.x }
-            return lhs.y > rhs.y
         }
-
-        var rows: [Row] = []
-        for fragment in fragments {
-            if let lastIndex = rows.indices.last,
-               abs(rows[lastIndex].y - fragment.y) <=
-                max(0.005, min(rows[lastIndex].height, fragment.height) * 0.46) {
-                rows[lastIndex].fragments.append(fragment)
-            } else {
-                rows.append(Row(
-                    y: fragment.y,
-                    height: fragment.height,
-                    fragments: [fragment]
-                ))
-            }
-        }
-
-        return rows.map { row in
-            row.fragments.sorted { $0.x < $1.x }
-                .map(\.text)
-                .joined(separator: "   ")
-        }.joined(separator: "\n")
+        return ReceiptOCRPage(pageNumber: 1, lines: ReceiptOCRLayout.lines(from: fragments))
     }
 }
