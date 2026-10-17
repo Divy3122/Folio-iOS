@@ -56,3 +56,20 @@ enum SampleReturnPolicies {
         ),
     ]
 }
+
+extension SampleReturnPolicies {
+    /// The generic policy used when the retailer isn't in the sample list.
+    static var fallback: RetailerPolicyTemplate {
+        all.first(where: { $0.retailerName == "Other retailer" })!
+    }
+
+    /// Suggests a sample policy for a receipt's retailer, e.g. "JB HI-FI BROADWAY" → JB Hi-Fi.
+    /// Falls back to "Other retailer" if nothing matches.
+    static func suggestedPolicy(forRetailer retailerName: String) -> RetailerPolicyTemplate {
+        let match = all.first(where: { template in
+            retailerName.localizedCaseInsensitiveContains(template.retailerName)
+        })
+    
+        return match ?? fallback
+    }
+}
