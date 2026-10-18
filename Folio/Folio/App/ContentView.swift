@@ -24,7 +24,7 @@ struct ContentView: View {
     var body: some View {
         Group {
             if let message = model.errorMessage {
-                ContentUnavailableView {
+            ContentUnavailableView {
                     Label(
                         "Local storage unavailable",
                         systemImage: "externaldrive.badge.exclamationmark"
