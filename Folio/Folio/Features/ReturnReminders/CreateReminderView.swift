@@ -126,6 +126,7 @@ struct CreateReminderView: View {
     var reminders: [ReturnReminder] = []
     func save(_ reminder: ReturnReminder) async throws { reminders.append(reminder) }
     func fetchAll() async throws -> [ReturnReminder] { reminders }
+    func delete(id: UUID) async throws { reminders.removeAll { $0.id == id } }
 }
 
 /// Pretends the user allowed notifications, without touching the real system.

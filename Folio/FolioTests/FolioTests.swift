@@ -23,6 +23,7 @@ import Testing
         values.append(reminder)
     }
     func fetchAll() async throws -> [ReturnReminder] { values }
+    func delete(id: UUID) async throws { values.removeAll { $0.id == id } }
 }
 
 @MainActor struct FolioTests {

@@ -114,6 +114,7 @@ struct ReturnRemindersView: View {
     init(reminders: [ReturnReminder]) { self.reminders = reminders }
     func save(_ reminder: ReturnReminder) async throws { reminders.append(reminder) }
     func fetchAll() async throws -> [ReturnReminder] { reminders }
+    func delete(id: UUID) async throws { reminders.removeAll { $0.id == id } }
 }
 
 #Preview("Reminders") {
