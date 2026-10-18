@@ -47,3 +47,16 @@ struct ReminderSummary: Identifiable, Equatable, Sendable {
         return summaries.sorted { $0.deadline < $1.deadline }
     }
 }
+
+/// Deletes a reminder and cancels its notification so it never fires.
+@MainActor struct DeleteReturnReminder {
+    let reminders: any ReminderRepository
+    let scheduler: any ReminderScheduling
+
+    func callAsFunction(id: UUID) async throws {
+        // Remove from storage first; if that fails, the notification is left alone
+        try await reminders.delete(id: id)
+        // Then make sure it never fires
+        await scheduler.cancel(id: id)
+    }
+}

@@ -23,9 +23,11 @@ import Observation
     private(set) var state: ScreenState = .loading
 
     private let loadReminderSummaries: LoadReminderSummaries
+    private let deleteReturnReminder: DeleteReturnReminder
 
-    init(loadReminderSummaries: LoadReminderSummaries) {
+    init(loadReminderSummaries: LoadReminderSummaries, deleteReturnReminder: DeleteReturnReminder) {
         self.loadReminderSummaries = loadReminderSummaries
+        self.deleteReturnReminder = deleteReturnReminder
     }
 
     /// Fetches the reminder rows and updates what the screen shows.
@@ -45,6 +47,16 @@ import Observation
             }
         } catch {
             // Show a readable message instead of crashing
+            state = .failed(error.localizedDescription)
+        }
+    }
+    
+    /// Deletes a reminder, then reloads the list so the screen matches what's saved.
+    func delete(id: UUID) async {
+        do {
+            try await deleteReturnReminder(id: id)
+            await load()
+        } catch {
             state = .failed(error.localizedDescription)
         }
     }
