@@ -9,7 +9,7 @@ import SwiftUI
         guard dependencies == nil else { return }
         do {
             let loaded = try DependencyContainer.live()
-            let services = try ReceiptLibraryServices(container: loaded)
+            let services = try ReceiptLibraryServices(container: loaded, scheduler: NotificationReminderScheduler())
             ReceiptSavingContext.current = ReceiptSavingContext(services: services, saveReceipt: loaded.saveReceipt)
             library = services
             dependencies = loaded
@@ -61,8 +61,18 @@ struct ContentView: View {
                     }
 
                     NavigationStack {
-                        Text("Reminder integration pending")
-                            .navigationTitle("Reminders")
+                        if let dependencies = model.dependencies {
+                            ReturnRemindersView(viewModel: ReturnRemindersViewModel(
+                                loadReminderSummaries: LoadReminderSummaries(
+                                    reminders: dependencies.reminders,
+                                    receipts: dependencies.receipts
+                                ),
+                                deleteReturnReminder: DeleteReturnReminder(
+                                    reminders: dependencies.reminders,
+                                    scheduler: NotificationReminderScheduler()
+                                )
+                            ))
+                        }
                     }
                     .tabItem {
                         Label("Reminders", systemImage: "bell")
