@@ -2,7 +2,12 @@ import SwiftUI
 import VisionKit
 
 struct ReceiptScannerView: View {
-    @State private var viewModel = ReceiptScannerViewModel()
+    @State private var viewModel: ReceiptScannerViewModel
+    @State private var showingSearch = false
+
+    init(dependencies: DependencyContainer? = nil) {
+        _viewModel = State(initialValue: ReceiptScannerViewModel(companyIdentifier: ReceiptCompanyIdentifier(), companies: dependencies?.companies, receipts: dependencies?.receipts))
+    }
     @State private var showingCamera = false
     @State private var showingResults = false
     @State private var isEditing = false
@@ -46,6 +51,8 @@ struct ReceiptScannerView: View {
                 .padding(24)
             }
             .navigationTitle("Receipt Scanner")
+            .toolbar { Button("Find purchases", systemImage: "magnifyingglass") { showingSearch = true } }
+            .sheet(isPresented: $showingSearch) { CompanyPurchaseSearchView(model: viewModel) }
             .navigationDestination(isPresented: $showingResults) {
                 Group {
                     if viewModel.isProcessing {

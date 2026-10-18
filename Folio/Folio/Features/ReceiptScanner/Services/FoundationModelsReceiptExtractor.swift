@@ -142,30 +142,28 @@ actor FoundationModelsReceiptExtractor: ReceiptEvidenceExtracting {
                 // Agentic-style escalation: request narrower on-device AI help
                 // only when product rows were missed or their prices were rejected.
                 // One extra pass per chunk; at most three per scanned receipt.
-                let mappedLines = Set(mapped.anchoredProducts.map(\.line))
-                let needsRetry = generated.products.count > mapped.anchoredProducts.count ||
-                    mapped.anchoredProducts.contains(where: { $0.product.lineTotal == nil }) ||
-                    ReceiptProductEvidenceVerifier.hasUnmappedPricedRow(
-                        lines: chunk.lines,
-                        startLine: chunk.startLine,
-                        mappedLines: mappedLines
-                    )
-                if needsRetry, focusedAttempts < 3, let generateFocused {
+                let targets = ReceiptProductEvidenceVerifier.retryLines(chunk: chunk, mapped: mapped)
+                if !targets.isEmpty, focusedAttempts < 3, let generateFocused {
                     focusedAttempts += 1
                     do {
+                        let retry = ReceiptProductEvidenceVerifier.retryContext(chunk: chunk, targets: targets)
+                        trace("FOCUSED TARGETS | \(targets.sorted())")
                         let focusedInput = ReceiptOCREvidencePrompt.focusedContext(
-                            numberedOCR: chunk.numberedText,
+                            numberedOCR: retry.text,
                             chunkStartLine: chunk.startLine,
                             chunkLines: chunk.lines,
                             originalText: text,
-                            pages: evidence
+                            pages: evidence,
+                            selectedLines: retry.lines
                         )
                         let proposals = try await generateFocused(focusedInput)
                         try Task.checkCancellation()
                         let verified = ReceiptProductEvidenceVerifier.verify(
                             proposals,
                             lines: chunk.lines,
-                            startLine: chunk.startLine
+                            startLine: chunk.startLine,
+                            allowedLines: targets,
+                            diagnose: { trace("FOCUSED EVIDENCE | " + $0) }
                         )
                         mapped = ReceiptProductEvidenceVerifier.merge(verified, into: mapped)
                         trace("FOCUSED RETRY | \(proposals.count) AI proposals; mapped products: \(mapped.costs.products.count)")

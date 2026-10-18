@@ -20,6 +20,8 @@ struct ReceiptReviewDraft: Codable, Equatable, Sendable {
     var total = ""
     var taxTreatment: ReceiptCostBreakdown.TaxTreatment = .unknown
     var discountTreatment: ReceiptCostBreakdown.DiscountTreatment = .unknown
+    var manualRetailerName: String? = nil
+    var manualReceiptDate: Date? = nil
 
     init(_ costs: ReceiptCostBreakdown = ReceiptCostBreakdown()) {
         products = costs.products.map {
