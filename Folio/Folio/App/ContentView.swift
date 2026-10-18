@@ -24,25 +24,53 @@ struct ContentView: View {
     var body: some View {
         Group {
             if let message = model.errorMessage {
-                NavigationStack {
-                    ContentUnavailableView {
-                        Label("Local storage unavailable", systemImage: "externaldrive.badge.exclamationmark")
-                    } description: {
-                        Text(message)
-                    } actions: {
-                        Button("Try again", action: model.load)
-                    }
-                    .navigationTitle("Folio")
+                ContentUnavailableView {
+                    Label(
+                        "Local storage unavailable",
+                        systemImage: "externaldrive.badge.exclamationmark"
+                    )
+                } description: {
+                    Text(message)
+                } actions: {
+                    Button("Try again", action: model.load)
                 }
-            } else if let library = model.library {
+            } else if model.dependencies != nil {
                 TabView {
-                    ReceiptScannerView()
-                        .tabItem { Label("Scan", systemImage: "doc.viewfinder") }
-                    ReceiptLibraryView(services: library)
-                        .tabItem { Label("Receipts", systemImage: "receipt") }
+                    NavigationStack {
+                        Text("Dashboard integration pending")
+                            .navigationTitle("Home")
+                    }
+                    .tabItem {
+                        Label("Home", systemImage: "house")
+                    }
+
+                    NavigationStack {
+                        Text("Receipt library integration pending")
+                            .navigationTitle("Receipts")
+                    }
+                    .tabItem {
+                        Label("Receipts", systemImage: "receipt")
+                    }
+
+                    NavigationStack {
+                        Text("Scanner integration pending")
+                            .navigationTitle("Scan")
+                    }
+                    .tabItem {
+                        Label("Scan", systemImage: "camera")
+                    }
+
+                    NavigationStack {
+                        Text("Reminder integration pending")
+                            .navigationTitle("Reminders")
+                    }
+                    .tabItem {
+                        Label("Reminders", systemImage: "bell")
+                    }
                 }
+                .tint(Color("BrandTeal"))
             } else {
-                ProgressView()
+                ProgressView("Opening Folio…")
             }
         }
         .task { model.load() }
