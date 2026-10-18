@@ -23,8 +23,14 @@ import Observation
 
     /// The sample policy picked by the user. Picking one resets the window to that policy's days.
     var selectedPolicy: RetailerPolicyTemplate {
-        didSet { windowDays = selectedPolicy.windowDays }
+        didSet {
+            windowDays = selectedPolicy.windowDays
+            userChangedPolicy = true
+        }
     }
+    /// True once the user picks a different policy in the picker.
+    private var userChangedPolicy = false
+    
     /// How many days the user has to return the item. Editable, so the user can correct the deadline.
     var windowDays: Int
     /// When the notification should fire.
@@ -49,7 +55,9 @@ import Observation
         // Start with a policy suggested from the retailer's name
         let suggested = SampleReturnPolicies.suggestedPolicy(forRetailer: receipt.retailer.name)
         self.selectedPolicy = suggested
-        self.windowDays = suggested.windowDays
+        
+        // If a policy was already confirmed when the receipt was saved, keep its days
+        self.windowDays = receipt.returnPolicy?.windowDays ?? suggested.windowDays
 
         // Placeholder; replaced with a sensible default just below
         self.notifyAt = Date()
@@ -81,7 +89,9 @@ import Observation
         do {
             // 1. Save the chosen policy onto the receipt
             var updatedReceipt = receipt
-            updatedReceipt.returnPolicy = ReturnPolicy(windowDays: windowDays, notes: selectedPolicy.notes)
+            // Keep the notes from the policy chosen when saving, unless the user picked a different one here
+            let notes = (userChangedPolicy ? nil : receipt.returnPolicy?.notes) ?? selectedPolicy.notes
+            updatedReceipt.returnPolicy = ReturnPolicy(windowDays: windowDays, notes: notes)
             try await saveReceipt(updatedReceipt)
 
             // 2. Create the reminder (the shared use case checks the dates are valid)

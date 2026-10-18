@@ -94,4 +94,21 @@ import Testing
         #expect(reminders.reminders.count == 1)   // still saved!
         #expect(scheduler.scheduled.count == 0)   // but nothing scheduled
     }
+    
+    // A policy chosen when the receipt was saved must not be replaced by the sample suggestion
+    @Test func existingReceiptPolicyIsKept() {
+        var receipt = PurchaseReceipt(retailer: Retailer(name: "JB Hi-Fi"), purchasedAt: Date(),
+                                      currencyCode: "AUD", total: 349)
+        receipt.returnPolicy = ReturnPolicy(windowDays: 30, notes: "Chosen on save")
+        let receipts = FakeReceiptRepository()
+        receipts.receipts = [receipt]
+
+        let viewModel = CreateReminderViewModel(
+            receipt: receipt,
+            saveReceipt: SaveReceipt(repository: receipts),
+            createReturnReminder: CreateReturnReminder(receipts: receipts, reminders: FakeReminderRepository()),
+            scheduler: FakeScheduler()
+        )
+        #expect(viewModel.windowDays == 30)   // not the JB Hi-Fi sample's 14
+    }
 }
