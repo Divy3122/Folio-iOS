@@ -5,6 +5,7 @@ struct ReceiptScannerView: View {
     @State private var viewModel = ReceiptScannerViewModel()
     @State private var showingCamera = false
     @State private var showingResults = false
+    @State private var showingSave = false
     @State private var isEditing = false
     @State private var confirmingReplacement = false
     @State private var pendingManualEntry = false
@@ -69,6 +70,20 @@ struct ReceiptScannerView: View {
                         Button(isEditing ? "Done" : "Edit") { isEditing.toggle() }
                             .disabled(viewModel.isProcessing)
                     }
+                }
+                .safeAreaInset(edge: .bottom) {
+                    if !viewModel.isProcessing {
+                        Button { showingSave = true } label: {
+                            Label("Save to library", systemImage: "tray.and.arrow.down")
+                                .frame(maxWidth: .infinity).padding(.vertical, 8)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .padding()
+                        .background(.bar)
+                    }
+                }
+                .sheet(isPresented: $showingSave) {
+                    ReceiptSaveSheet(costs: viewModel.review.costs, pages: viewModel.originalPages)
                 }
             }
             .confirmationDialog("Replace the saved receipt draft?", isPresented: $confirmingReplacement, titleVisibility: .visible) {
