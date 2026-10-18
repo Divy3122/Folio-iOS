@@ -8,12 +8,57 @@ struct ReceiptRecord: Identifiable, Codable, Equatable, Sendable {
     var id: UUID { receipt.id }
 }
 
+struct SavedPolicy: Identifiable, Codable, Equatable, Sendable {
+    enum Kind: String, Codable, CaseIterable, Sendable { case returns, warranty }
+
+    var id = UUID()
+    var kind: Kind
+    var title: String
+    var windowDays: Int
+    var notes = ""
+}
+
+struct SavedRetailer: Identifiable, Codable, Equatable, Sendable {
+    var id = UUID()
+    var name: String
+    var policies: [SavedPolicy] = []
+
+    static func key(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+}
+
+/// A copy of a policy taken when the receipt was saved, so later edits to the retailer don't change old receipts.
+struct AppliedPolicy: Identifiable, Codable, Equatable, Sendable {
+    var id = UUID()
+    var kind: SavedPolicy.Kind
+    var title: String
+    var windowDays: Int
+    var notes = ""
+    var sourcePolicyID: UUID?
+}
+
+enum RetailerError: Error, Equatable, LocalizedError {
+    case emptyName
+    case duplicateName(String)
+    case invalidPolicy
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyName: "Enter a retailer name."
+        case .duplicateName(let name): "A saved retailer called \(name) already exists. Choose it from the saved retailers menu to edit it."
+        case .invalidPolicy: "Give every policy a name and a number of days from 1 to 3650."
+        }
+    }
+}
+
 struct ReceiptMetadata: Codable, Equatable, Sendable {
     enum ExtractionSource: String, Codable, Sendable { case vision, foundationModels, manual }
 
     var category = ""
     var tags: [String] = []
     var notes = ""
+    var policies: [AppliedPolicy] = []
     var imageCount = 0
     var extractionSource: ExtractionSource?
     var createdAt = Date()
@@ -26,6 +71,7 @@ struct ReceiptMetadata: Codable, Equatable, Sendable {
         category = try c.decodeIfPresent(String.self, forKey: .category) ?? ""
         tags = try c.decodeIfPresent([String].self, forKey: .tags) ?? []
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        policies = try c.decodeIfPresent([AppliedPolicy].self, forKey: .policies) ?? []
         imageCount = try c.decodeIfPresent(Int.self, forKey: .imageCount) ?? 0
         extractionSource = try? c.decodeIfPresent(ExtractionSource.self, forKey: .extractionSource)
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
@@ -39,6 +85,12 @@ struct ReceiptMetadata: Codable, Equatable, Sendable {
     func search(_ filter: ReceiptFilter) async throws -> [ReceiptRecord]
     func delete(id: UUID) async throws
     func possibleDuplicates(of receipt: PurchaseReceipt) async throws -> [ReceiptRecord]
+}
+
+@MainActor protocol RetailerRepository {
+    func fetchAll() async throws -> [SavedRetailer]
+    func save(_ retailer: SavedRetailer) async throws
+    func delete(id: UUID) async throws
 }
 
 struct ReceiptFilter: Equatable, Sendable {

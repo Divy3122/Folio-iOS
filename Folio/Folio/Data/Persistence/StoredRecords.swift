@@ -40,8 +40,24 @@ import SwiftData
     init(id: UUID, payload: Data) { self.id = id; self.payload = payload }
 }
 
+/// Saved retailers live in their own store file, so the app's main container is not touched.
+@Model final class StoredRetailer {
+    @Attribute(.unique) var id: UUID
+    var name: String = ""
+    var nameKey: String = ""
+    var payload: Data
+    var schemaVersion: Int = 1
+
+    init(id: UUID, name: String, nameKey: String, payload: Data) {
+        self.id = id
+        self.name = name
+        self.nameKey = nameKey
+        self.payload = payload
+    }
+}
+
 struct ReceiptIndex: Sendable {
-    static let currentVersion = 1
+    static let currentVersion = 2
 
     let retailerName: String
     let purchaseDate: Date
@@ -63,6 +79,7 @@ struct ReceiptIndex: Sendable {
 
         let words = [receipt.retailer.name, record.metadata.category, record.metadata.notes]
             + record.metadata.tags
+            + record.metadata.policies.flatMap { [$0.kind.rawValue, $0.title] }
             + receipt.items.map(\.name)
             + (record.costs?.products.map(\.name) ?? [])
         searchText = words.joined(separator: " ").lowercased()

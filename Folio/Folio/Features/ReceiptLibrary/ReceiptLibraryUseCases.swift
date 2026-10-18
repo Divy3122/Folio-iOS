@@ -49,13 +49,57 @@ import Foundation
     }
 }
 
+@MainActor struct ManageRetailers {
+    let repository: any RetailerRepository
+
+    func all() async throws -> [SavedRetailer] {
+        try await repository.fetchAll()
+    }
+
+    func save(_ retailer: SavedRetailer) async throws {
+        var retailer = retailer
+        retailer.name = retailer.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !retailer.name.isEmpty else { throw RetailerError.emptyName }
+
+        retailer.policies = try retailer.policies.map { original in
+            var policy = original
+            policy.title = policy.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            policy.notes = policy.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !policy.title.isEmpty, (1...3650).contains(policy.windowDays) else {
+                throw RetailerError.invalidPolicy
+            }
+            return policy
+        }
+
+        let key = SavedRetailer.key(retailer.name)
+        let others = try await repository.fetchAll().filter { $0.id != retailer.id }
+        guard !others.contains(where: { SavedRetailer.key($0.name) == key }) else {
+            throw RetailerError.duplicateName(retailer.name)
+        }
+        try await repository.save(retailer)
+    }
+
+    func delete(id: UUID) async throws {
+        try await repository.delete(id: id)
+    }
+}
+
+/// Deletes a receipt, its reminders (cancelling their notifications) and its page images.
+/// Reminders go first: if one cannot be removed the receipt is kept, because a reminder
+/// for a deleted receipt would still fire. Without a scheduler only the stored reminders go.
 @MainActor struct DeleteReceipt {
     let repository: any ReceiptLibraryRepository
     let images: any ReceiptImageStore
-    var beforeDelete: (UUID) async throws -> Void = { _ in }
+    var reminders: (any ReminderRepository)?
+    var scheduler: (any ReminderScheduling)?
 
     func callAsFunction(id: UUID) async throws {
-        try await beforeDelete(id)
+        if let reminders {
+            for reminder in try await reminders.fetchAll() where reminder.receiptID == id {
+                try await reminders.delete(id: reminder.id)
+                await scheduler?.cancel(id: reminder.id)
+            }
+        }
         try await repository.delete(id: id)
         try? images.delete(receiptID: id)
     }

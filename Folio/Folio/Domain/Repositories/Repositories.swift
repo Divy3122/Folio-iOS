@@ -8,6 +8,7 @@ import Foundation
 @MainActor protocol ReminderRepository {
     func save(_ reminder: ReturnReminder) async throws
     func fetchAll() async throws -> [ReturnReminder]
+    func delete(id: UUID) async throws
 }
 
 protocol ReceiptTextRecognizing: Sendable {
@@ -23,4 +24,5 @@ protocol ReceiptExtracting: Sendable {
     func requestAuthorization() async throws -> Bool
     func schedule(_ reminder: ReturnReminder) async throws
     func cancel(id: UUID) async
+    
 }

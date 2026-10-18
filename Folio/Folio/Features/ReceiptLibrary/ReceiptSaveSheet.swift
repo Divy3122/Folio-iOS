@@ -9,6 +9,54 @@ struct ReceiptSavingContext {
     static var current: ReceiptSavingContext?
 }
 
+struct PolicyDraft: Identifiable, Equatable {
+    var id = UUID()
+    var kind: SavedPolicy.Kind = .returns
+    var title = ""
+    var daysText = ""
+    var notes = ""
+    var applies = true
+
+    init() {}
+
+    init(_ policy: SavedPolicy) {
+        id = policy.id
+        kind = policy.kind
+        title = policy.title
+        daysText = String(policy.windowDays)
+        notes = policy.notes
+    }
+
+    var days: Int? {
+        guard let value = Int(daysText.trimmingCharacters(in: .whitespaces)), (1...3650).contains(value) else {
+            return nil
+        }
+        return value
+    }
+
+    private var cleanTitle: String { title.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var cleanNotes: String { notes.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var isValid: Bool { !cleanTitle.isEmpty && days != nil }
+
+    var saved: SavedPolicy? {
+        days.map { SavedPolicy(id: id, kind: kind, title: cleanTitle, windowDays: $0, notes: cleanNotes) }
+    }
+
+    var applied: AppliedPolicy? {
+        days.map { AppliedPolicy(kind: kind, title: cleanTitle, windowDays: $0, notes: cleanNotes, sourcePolicyID: id) }
+    }
+}
+
+extension SavedPolicy.Kind {
+    var label: String {
+        switch self {
+        case .returns: "Return"
+        case .warranty: "Warranty"
+        }
+    }
+}
+
 @MainActor @Observable
 final class ReceiptSaveViewModel {
     enum Phase: Equatable { case editing, saving, saved, attachFailed(String) }
@@ -20,9 +68,14 @@ final class ReceiptSaveViewModel {
     var totalText: String
     var category = ""
     var tagsText = ""
+    var policyDrafts: [PolicyDraft] = []
+    var rememberRetailer = true
     var showDuplicatePrompt = false
+    var showDeleteRetailerPrompt = false
     private(set) var isSuggestingMetadata = false
     private(set) var metadataSuggestionMessage: String?
+    private(set) var savedRetailers: [SavedRetailer] = []
+    private(set) var selectedRetailerID: UUID?
 
     private(set) var phase: Phase = .editing
     private(set) var errorMessage: String?
@@ -33,6 +86,7 @@ final class ReceiptSaveViewModel {
     private let pages: [Data]
     private let source: ReceiptMetadata.ExtractionSource?
     private var hasRequestedSuggestions = false
+    private var appliedPolicies: [AppliedPolicy] = []
 
     init(costs: ReceiptCostBreakdown, pages: [Data], source: ReceiptMetadata.ExtractionSource? = nil) {
         let preferred = Locale.current.currency?.identifier ?? "AUD"
@@ -49,6 +103,59 @@ final class ReceiptSaveViewModel {
             && ReceiptAmountParser.parse(totalText) != nil
     }
 
+    // MARK: Retailers and policies
+
+    func loadRetailers() async {
+        guard let context = ReceiptSavingContext.current else { return }
+        do { savedRetailers = try await context.services.manageRetailers.all() }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func selectRetailer(_ saved: SavedRetailer) {
+        selectedRetailerID = saved.id
+        retailer = saved.name
+        policyDrafts = saved.policies.map(PolicyDraft.init)
+    }
+
+    func startNewRetailer() {
+        selectedRetailerID = nil
+        retailer = ""
+        policyDrafts = []
+    }
+
+    /// Typing the exact name of a saved retailer loads it, unless policies have already been entered by hand.
+    func retailerTextChanged() {
+        guard selectedRetailerID == nil, policyDrafts.isEmpty else { return }
+        let key = SavedRetailer.key(retailer)
+        guard !key.isEmpty, let match = savedRetailers.first(where: { SavedRetailer.key($0.name) == key }) else { return }
+        selectRetailer(match)
+    }
+
+    func addPolicy() { policyDrafts.append(PolicyDraft()) }
+
+    func removePolicy(id: UUID) { policyDrafts.removeAll { $0.id == id } }
+
+    func deleteSelectedRetailer() async {
+        guard let id = selectedRetailerID, let context = ReceiptSavingContext.current else { return }
+        do {
+            try await context.services.manageRetailers.delete(id: id)
+            selectedRetailerID = nil
+            savedRetailers = try await context.services.manageRetailers.all()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func rememberCurrentRetailer(using context: ReceiptSavingContext) async throws {
+        let id = selectedRetailerID ?? UUID()
+        let saved = SavedRetailer(id: id, name: retailer, policies: policyDrafts.compactMap(\.saved))
+        try await context.services.manageRetailers.save(saved)
+        selectedRetailerID = id
+        savedRetailers = try await context.services.manageRetailers.all()
+    }
+
+    // MARK: Suggestions
+
     func suggestMetadataIfNeeded() async {
         guard !hasRequestedSuggestions else { return }
         hasRequestedSuggestions = true
@@ -62,7 +169,7 @@ final class ReceiptSaveViewModel {
         guard let suggestion = await ReceiptMetadataSuggester.suggest(
             retailer: retailer.isEmpty ? "Unknown retailer" : retailer,
             itemNames: names,
-            total: costs.total!
+            total: ReceiptAmountParser.parse(totalText) ?? costs.total ?? 0
         ) else {
             metadataSuggestionMessage = "Automatic suggestions require a supported Apple Intelligence device and iOS 26 or later. You can enter these manually."
             return
@@ -82,18 +189,26 @@ final class ReceiptSaveViewModel {
         metadataSuggestionMessage = nil
     }
 
+    // MARK: Saving
+
     func save(ignoringDuplicates: Bool = false) async {
         errorMessage = nil
         guard let context = ReceiptSavingContext.current else {
             errorMessage = "Receipt storage isn't available."
             return
         }
+        guard policyDrafts.allSatisfy(\.isValid) else {
+            errorMessage = RetailerError.invalidPolicy.localizedDescription
+            return
+        }
+        appliedPolicies = policyDrafts.filter(\.applies).compactMap(\.applied)
         guard let receipt = makeReceipt() else {
             errorMessage = "Enter a retailer and a valid total."
             return
         }
         phase = .saving
         do {
+            if rememberRetailer { try await rememberCurrentRetailer(using: context) }
             if !ignoringDuplicates {
                 let duplicates = try await context.services.detectDuplicate(receipt)
                 if !duplicates.isEmpty {
@@ -126,9 +241,11 @@ final class ReceiptSaveViewModel {
             let tags = tagsText
                 .split { $0 == "," || $0 == "\n" }
                 .map(String.init)
+            let policies = appliedPolicies
             try await context.services.updateMetadata(id: receiptID) { metadata in
                 metadata.category = categoryValue
                 metadata.tags = UpdateReceiptMetadata.normalised(tags)
+                metadata.policies = policies
             }
             phase = .saved
         } catch {
@@ -136,9 +253,12 @@ final class ReceiptSaveViewModel {
         }
     }
 
+    /// Reminders use the shortest return window that applies; warranties are kept with the receipt only.
     private func makeReceipt() -> PurchaseReceipt? {
         let name = retailer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, let total = ReceiptAmountParser.parse(totalText), total >= 0 else { return nil }
+        let returns = appliedPolicies.filter { $0.kind == .returns }
+        let shortest = returns.min { $0.windowDays < $1.windowDays }
         return PurchaseReceipt(
             id: receiptID,
             retailer: Retailer(name: name),
@@ -146,7 +266,8 @@ final class ReceiptSaveViewModel {
             currencyCode: currency,
             total: total,
             items: Self.items(from: costs),
-            profile: profile
+            profile: profile,
+            returnPolicy: shortest.map { ReturnPolicy(windowDays: $0.windowDays, notes: $0.notes) }
         )
     }
 
@@ -207,12 +328,22 @@ struct ReceiptSaveSheet: View {
             }
             .disabled(model.phase == .saving)
             .interactiveDismissDisabled(model.phase == .saving)
+            .task { await model.loadRetailers() }
             .task { await model.suggestMetadataIfNeeded() }
+            .onChange(of: model.retailer) { model.retailerTextChanged() }
             .alert("Possible duplicate", isPresented: $model.showDuplicatePrompt) {
                 Button("Save anyway") { Task { await model.save(ignoringDuplicates: true) } }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("A receipt with the same retailer, date and total is already saved.")
+            }
+            .confirmationDialog("Delete this saved retailer?", isPresented: $model.showDeleteRetailerPrompt,
+                                titleVisibility: .visible) {
+                Button("Delete retailer", role: .destructive) {
+                    Task { await model.deleteSelectedRetailer() }
+                }
+            } message: {
+                Text("Receipts you have already saved keep their own copy of these policies.")
             }
         }
     }
@@ -230,6 +361,17 @@ struct ReceiptSaveSheet: View {
     private var form: some View {
         Form {
             Section("Receipt") {
+                if !model.savedRetailers.isEmpty {
+                    Menu {
+                        ForEach(model.savedRetailers) { saved in
+                            Button(saved.name) { model.selectRetailer(saved) }
+                        }
+                        Divider()
+                        Button("New retailer", systemImage: "plus") { model.startNewRetailer() }
+                    } label: {
+                        Label("Saved retailers", systemImage: "storefront")
+                    }
+                }
                 TextField("Retailer", text: $model.retailer)
                     .textInputAutocapitalization(.words)
                 DatePicker("Purchase date", selection: $model.date, in: ...Date.now, displayedComponents: .date)
@@ -238,6 +380,32 @@ struct ReceiptSaveSheet: View {
                         Text(profile.rawValue.capitalized).tag(profile)
                     }
                 }
+            }
+
+            Section {
+                ForEach($model.policyDrafts) { $draft in
+                    PolicyEditor(draft: $draft) { model.removePolicy(id: draft.id) }
+                }
+                Button { model.addPolicy() } label: {
+                    Label("Add policy", systemImage: "plus.circle")
+                }
+                Toggle("Remember this retailer and its policies", isOn: $model.rememberRetailer)
+                if model.selectedRetailerID != nil {
+                    Button("Delete saved retailer", role: .destructive) {
+                        model.showDeleteRetailerPrompt = true
+                    }
+                }
+                Label {
+                    Text("You are responsible for entering accurate return and warranty policies. Folio can't verify them, and they are not legal advice or a statement of your consumer rights. Check the retailer's own terms.")
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
+                .font(.footnote)
+            } header: {
+                Text("Return and warranty policies")
+            } footer: {
+                Text("Policies you apply are stored with this receipt. Return reminders use the shortest return window you apply.")
             }
 
             Section("Amount") {
@@ -286,6 +454,30 @@ struct ReceiptSaveSheet: View {
                 }
             }
         }
+    }
+}
+
+private struct PolicyEditor: View {
+    @Binding var draft: PolicyDraft
+    let onRemove: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Picker("Type", selection: $draft.kind) {
+                ForEach(SavedPolicy.Kind.allCases, id: \.self) { kind in
+                    Text(kind.label).tag(kind)
+                }
+            }
+            .pickerStyle(.segmented)
+            TextField("Policy name, e.g. Change of mind", text: $draft.title)
+            TextField("Days", text: $draft.daysText)
+                .keyboardType(.numberPad)
+            TextField("Notes (optional)", text: $draft.notes, axis: .vertical)
+            Toggle("Applies to this receipt", isOn: $draft.applies)
+            Button("Remove policy", role: .destructive, action: onRemove)
+                .buttonStyle(.borderless)
+        }
+        .padding(.vertical, 4)
     }
 }
 

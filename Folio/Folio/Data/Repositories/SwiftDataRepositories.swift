@@ -107,7 +107,7 @@ import SwiftData
         } catch { throw FolioError.persistenceFailure }
     }
 
-    /// Backfills query columns for receipts saved before they existed.
+    /// Backfills query columns for receipts saved before they existed or before the index changed.
     private func ensureIndexed() throws {
         guard !indexUpToDate else { return }
         do {
@@ -149,6 +149,60 @@ import SwiftData
     }
 }
 
+@MainActor final class SwiftDataRetailerRepository: RetailerRepository {
+    private let context: ModelContext
+
+    init(container: ModelContainer) {
+        context = ModelContext(container)
+        context.autosaveEnabled = false
+    }
+
+    static func makeContainer() throws -> ModelContainer {
+        let schema = Schema([StoredRetailer.self])
+        let configuration = ModelConfiguration("Retailers", schema: schema, cloudKitDatabase: .none)
+        return try ModelContainer(for: schema, configurations: [configuration])
+    }
+
+    func fetchAll() async throws -> [SavedRetailer] {
+        do {
+            let descriptor = FetchDescriptor<StoredRetailer>(sortBy: [SortDescriptor(\.nameKey)])
+            return try context.fetch(descriptor).map { try decode($0) }
+        } catch { throw FolioError.persistenceFailure }
+    }
+
+    func save(_ retailer: SavedRetailer) async throws {
+        do {
+            let id = retailer.id
+            let payload = try JSONEncoder().encode(retailer)
+            let key = SavedRetailer.key(retailer.name)
+            let descriptor = FetchDescriptor<StoredRetailer>(predicate: #Predicate { $0.id == id })
+            if let stored = try context.fetch(descriptor).first {
+                stored.name = retailer.name
+                stored.nameKey = key
+                stored.payload = payload
+                stored.schemaVersion = 1
+            } else {
+                context.insert(StoredRetailer(id: id, name: retailer.name, nameKey: key, payload: payload))
+            }
+            try context.save()
+        } catch { context.rollback(); throw FolioError.persistenceFailure }
+    }
+
+    func delete(id: UUID) async throws {
+        do {
+            let descriptor = FetchDescriptor<StoredRetailer>(predicate: #Predicate { $0.id == id })
+            guard let stored = try context.fetch(descriptor).first else { return }
+            context.delete(stored)
+            try context.save()
+        } catch { context.rollback(); throw FolioError.persistenceFailure }
+    }
+
+    private func decode(_ stored: StoredRetailer) throws -> SavedRetailer {
+        guard stored.schemaVersion == 1 else { throw FolioError.persistenceFailure }
+        return try JSONDecoder().decode(SavedRetailer.self, from: stored.payload)
+    }
+}
+
 @MainActor final class SwiftDataReminderRepository: ReminderRepository {
     private let context: ModelContext
     init(container: ModelContainer) {
@@ -172,5 +226,13 @@ import SwiftData
                 return try JSONDecoder().decode(ReturnReminder.self, from: $0.payload)
             }.sorted { $0.notifyAt < $1.notifyAt }
         } catch { throw FolioError.persistenceFailure }
+    }
+    func delete(id: UUID) async throws {
+        do {
+            let descriptor = FetchDescriptor<StoredReminder>(predicate: #Predicate { $0.id == id })
+            guard let stored = try context.fetch(descriptor).first else { return }
+            context.delete(stored)
+            try context.save()
+        } catch { context.rollback(); throw FolioError.persistenceFailure }
     }
 }
