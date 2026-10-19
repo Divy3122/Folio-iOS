@@ -45,16 +45,16 @@ struct ContentView: View {
                     }
 
                     NavigationStack {
-                        Text("Receipt library integration pending")
-                            .navigationTitle("Receipts")
+                        if let library = model.library {
+                            ReceiptLibraryView(services: library)
+                        }
                     }
                     .tabItem {
                         Label("Receipts", systemImage: "receipt")
                     }
 
                     NavigationStack {
-                        Text("Scanner integration pending")
-                            .navigationTitle("Scan")
+                        ReceiptScannerView()
                     }
                     .tabItem {
                         Label("Scan", systemImage: "camera")
@@ -78,7 +78,7 @@ struct ContentView: View {
                         Label("Reminders", systemImage: "bell")
                     }
                 }
-                .tint(Color("BrandTeal"))
+                .tint(.BrandTeal)
             } else {
                 ProgressView("Opening Folio…")
             }
