@@ -473,6 +473,7 @@ private struct NewRetailerView: View {
     }
 }
 
+
 struct RetailerEditForm: View {
     @Binding var name: String
     @Binding var policies: [PolicyDraft]
@@ -482,50 +483,209 @@ struct RetailerEditForm: View {
             TextField("Retailer name", text: $name)
                 .textInputAutocapitalization(.words)
         }
+
         Section {
             ForEach($policies) { $draft in
-                PolicyEditor(draft: $draft, showsApplies: false) {
-                    policies.removeAll { $0.id == draft.id }
+                if draft.kind == .returns {
+                    PolicyEditor(
+                        draft: $draft,
+                        showsApplies: false,
+                        fixedKind: .returns
+                    ) {
+                        policies.removeAll { $0.id == draft.id }
+                    }
                 }
             }
-            Button { policies.append(PolicyDraft()) } label: {
-                Label("Add policy", systemImage: "plus.circle")
+
+            Button {
+                addPolicy(.returns)
+            } label: {
+                Label("Add return policy", systemImage: "plus.circle")
             }
+        } header: {
+            Text("Return policies")
+        } footer: {
+            Text("Set the return window in days. Add separate policies for change of mind, faulty items, or other conditions.")
+        }
+
+        Section {
+            ForEach($policies) { $draft in
+                if draft.kind == .warranty {
+                    PolicyEditor(
+                        draft: $draft,
+                        showsApplies: false,
+                        fixedKind: .warranty
+                    ) {
+                        policies.removeAll { $0.id == draft.id }
+                    }
+                }
+            }
+
+            Button {
+                addPolicy(.warranty)
+            } label: {
+                Label("Add warranty", systemImage: "plus.circle")
+            }
+
             PolicyLiabilityNotice()
         } header: {
-            Text("Return and warranty policies")
+            Text("Warranties")
         } footer: {
-            Text("Add as many as the retailer offers, such as change of mind, faulty items or a manufacturer warranty.")
+            Text("Warranty durations can be entered in days, months, or years. They are stored as days.")
         }
     }
+
+    private func addPolicy(_ kind: SavedPolicy.Kind) {
+        var draft = PolicyDraft()
+        draft.kind = kind
+        draft.title = kind == .returns ? "Return policy" : "Warranty"
+        draft.daysText = kind == .returns ? "30" : ""
+        draft.warrantyValue = 12
+        draft.warrantyUnit = .months
+        policies.append(draft)
+    }
 }
+
+
 
 struct PolicyEditor: View {
     @Binding var draft: PolicyDraft
     var showsApplies = true
+    var fixedKind: SavedPolicy.Kind? = nil
     let onRemove: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Picker("Type", selection: $draft.kind) {
-                ForEach(SavedPolicy.Kind.allCases, id: \.self) { kind in
-                    Text(kind.label).tag(kind)
+        VStack(alignment: .leading, spacing: 14) {
+            if let fixedKind {
+                Label(
+                    fixedKind == .returns ? "Return policy" : "Warranty",
+                    systemImage: fixedKind == .returns
+                        ? "arrow.uturn.backward.circle"
+                        : "checkmark.shield"
+                )
+                .font(.headline)
+            } else {
+                Picker("Type", selection: $draft.kind) {
+                    ForEach(SavedPolicy.Kind.allCases, id: \.self) {
+                        Text($0.label).tag($0)
+                    }
                 }
+                .pickerStyle(.segmented)
             }
-            .pickerStyle(.segmented)
-            TextField("Policy name, e.g. Change of mind", text: $draft.title)
-            TextField("Days", text: $draft.daysText)
-                .keyboardType(.numberPad)
+
+            TextField(
+                fixedKind == .warranty ? "Warranty name" : "Policy name",
+                text: $draft.title
+            )
+            .textInputAutocapitalization(.words)
+
+            if effectiveKind == .returns {
+                returnDurationPicker
+            } else {
+                warrantyDurationPicker
+            }
+
             TextField("Notes (optional)", text: $draft.notes, axis: .vertical)
+                .lineLimit(2...4)
+
             if showsApplies {
                 Toggle("Applies to this receipt", isOn: $draft.applies)
             }
+
             Button("Remove policy", role: .destructive, action: onRemove)
                 .buttonStyle(.borderless)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
+        .onChange(of: draft.kind) { _, newKind in
+            if newKind == .warranty {
+                draft.warrantyUnit = .days
+                draft.warrantyValue = min(
+                    3650,
+                    max(1, Int(draft.daysText) ?? 30)
+                )
+            }
+        }
+    }
+
+    private var effectiveKind: SavedPolicy.Kind {
+        fixedKind ?? draft.kind
+    }
+
+    private var returnDurationPicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Return window")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            Picker("Return window in days", selection: returnDaysBinding) {
+                ForEach(1...3650, id: \.self) { day in
+                    Text("\(day) \(day == 1 ? "day" : "days")")
+                        .tag(day)
+                }
+            }
+            .pickerStyle(.wheel)
+            .frame(height: 120)
+            .clipped()
+            .accessibilityLabel("Return window in days")
+        }
+    }
+
+    private var returnDaysBinding: Binding<Int> {
+        Binding(
+            get: {
+                min(3650, max(1, Int(draft.daysText) ?? 30))
+            },
+            set: {
+                draft.daysText = String($0)
+            }
+        )
+    }
+
+    private var warrantyDurationPicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Warranty duration")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 0) {
+                Picker("Duration", selection: $draft.warrantyValue) {
+                    ForEach(
+                        1...draft.warrantyUnit.maximum,
+                        id: \.self
+                    ) { value in
+                        Text("\(value)").tag(value)
+                    }
+                }
+                .pickerStyle(.wheel)
+                .frame(maxWidth: .infinity)
+                .clipped()
+
+                Picker("Unit", selection: $draft.warrantyUnit) {
+                    ForEach(PolicyDraft.WarrantyUnit.allCases) { unit in
+                        Text(unit.rawValue).tag(unit)
+                    }
+                }
+                .pickerStyle(.wheel)
+                .frame(maxWidth: .infinity)
+                .clipped()
+            }
+            .frame(height: 120)
+            .onChange(of: draft.warrantyUnit) { _, unit in
+                draft.warrantyValue = min(
+                    unit.maximum,
+                    max(1, draft.warrantyValue)
+                )
+            }
+
+            if let days = draft.days {
+                Text("Stored as \(days) days")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }
+
 
 struct PolicyLiabilityNotice: View {
     var body: some View {

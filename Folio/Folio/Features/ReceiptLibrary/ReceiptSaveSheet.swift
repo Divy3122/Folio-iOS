@@ -9,13 +9,33 @@ struct ReceiptSavingContext {
     static var current: ReceiptSavingContext?
 }
 
+
 struct PolicyDraft: Identifiable, Equatable {
+    enum WarrantyUnit: String, CaseIterable, Identifiable {
+        case days = "Days"
+        case months = "Months"
+        case years = "Years"
+
+        var id: String { rawValue }
+
+        var maximum: Int {
+            switch self {
+            case .days: 3650
+            case .months: 120
+            case .years: 10
+            }
+        }
+    }
+
     var id = UUID()
     var kind: SavedPolicy.Kind = .returns
     var title = ""
     var daysText = ""
     var notes = ""
     var applies = true
+
+    var warrantyUnit: WarrantyUnit = .days
+    var warrantyValue = 30
 
     init() {}
 
@@ -25,28 +45,74 @@ struct PolicyDraft: Identifiable, Equatable {
         title = policy.title
         daysText = String(policy.windowDays)
         notes = policy.notes
+
+        if policy.kind == .warranty {
+            warrantyUnit = .days
+            warrantyValue = min(3650, max(1, policy.windowDays))
+        }
     }
 
     var days: Int? {
-        guard let value = Int(daysText.trimmingCharacters(in: .whitespaces)), (1...3650).contains(value) else {
+        if kind == .warranty {
+            guard (1...warrantyUnit.maximum).contains(warrantyValue) else {
+                return nil
+            }
+
+            switch warrantyUnit {
+            case .days:
+                return warrantyValue
+            case .months:
+                return WarrantyLength.days(months: warrantyValue)
+            case .years:
+                return WarrantyLength.days(months: warrantyValue * 12)
+            }
+        }
+
+        guard let value = Int(daysText.trimmingCharacters(in: .whitespaces)),
+              (1...3650).contains(value) else {
             return nil
         }
+
         return value
     }
 
-    private var cleanTitle: String { title.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var cleanNotes: String { notes.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var cleanTitle: String {
+        title.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
-    var isValid: Bool { !cleanTitle.isEmpty && days != nil }
+    private var cleanNotes: String {
+        notes.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var isValid: Bool {
+        !cleanTitle.isEmpty && days != nil
+    }
 
     var saved: SavedPolicy? {
-        days.map { SavedPolicy(id: id, kind: kind, title: cleanTitle, windowDays: $0, notes: cleanNotes) }
+        days.map {
+            SavedPolicy(
+                id: id,
+                kind: kind,
+                title: cleanTitle,
+                windowDays: $0,
+                notes: cleanNotes
+            )
+        }
     }
 
     var applied: AppliedPolicy? {
-        days.map { AppliedPolicy(kind: kind, title: cleanTitle, windowDays: $0, notes: cleanNotes, sourcePolicyID: id) }
+        days.map {
+            AppliedPolicy(
+                kind: kind,
+                title: cleanTitle,
+                windowDays: $0,
+                notes: cleanNotes,
+                sourcePolicyID: id
+            )
+        }
     }
 }
+
 
 extension SavedPolicy.Kind {
     var label: String {
@@ -398,9 +464,56 @@ struct ReceiptSaveSheet: View {
                     Label("Policies from \(name). Adjust them for this receipt below.", systemImage: "storefront")
                         .font(.footnote)
                 }
-                ForEach($model.policyDrafts) { $draft in
-                    PolicyEditor(draft: $draft) { model.removePolicy(id: draft.id) }
+
+                Section {
+                    ForEach($model.policyDrafts) { $draft in
+                        if draft.kind == .returns {
+                            PolicyEditor(draft: $draft) {
+                                model.removePolicy(id: draft.id)
+                            }
+                        }
+                    }
+
+                    Button {
+                        var draft = PolicyDraft()
+                        draft.kind = .returns
+                        draft.title = "Return policy"
+                        draft.daysText = "30"
+                        model.policyDrafts.append(draft)
+                    } label: {
+                        Label("Add return policy", systemImage: "plus.circle")
+                    }
+                } header: {
+                    Text("Return policies")
+                } footer: {
+                    Text("Return reminders use the shortest return window you apply.")
                 }
+
+                Section {
+                    ForEach($model.policyDrafts) { $draft in
+                        if draft.kind == .warranty {
+                            PolicyEditor(draft: $draft) {
+                                model.removePolicy(id: draft.id)
+                            }
+                        }
+                    }
+
+                    Button {
+                        var draft = PolicyDraft()
+                        draft.kind = .warranty
+                        draft.title = "Warranty"
+                        draft.warrantyValue = 12
+                        draft.warrantyUnit = .months
+                        model.policyDrafts.append(draft)
+                    } label: {
+                        Label("Add warranty", systemImage: "plus.circle")
+                    }
+                } header: {
+                    Text("Warranties")
+                } footer: {
+                    Text("Applied warranties are saved with the receipt. Warranty durations are stored as days.")
+                }
+
                 Button { model.addPolicy() } label: {
                     Label("Add policy", systemImage: "plus.circle")
                 }
