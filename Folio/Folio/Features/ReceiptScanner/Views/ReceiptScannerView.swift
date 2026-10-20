@@ -6,7 +6,7 @@ struct ReceiptScannerView: View {
     @State private var showingSearch = false
 
     init(dependencies: DependencyContainer? = nil) {
-        _viewModel = State(initialValue: ReceiptScannerViewModel(companyIdentifier: ReceiptCompanyIdentifier(), companies: dependencies?.companies, receipts: dependencies?.receipts))
+        _viewModel = State(initialValue: ReceiptScannerViewModel(receipts: dependencies?.receipts))
     }
     @State private var showingCamera = false
     @State private var showingResults = false
