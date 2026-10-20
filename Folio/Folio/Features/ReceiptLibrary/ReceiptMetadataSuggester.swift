@@ -52,7 +52,7 @@ enum ReceiptMetadataSuggester {
         total: Decimal
     ) async throws -> ReceiptMetadataSuggestion? {
         let session = LanguageModelSession {
-            "You organise purchase receipts. Suggest only metadata supported by the supplied retailer and item names. Never invent products, events, warranties, or purposes. Use a concise category and up to five short tags. If evidence is weak, use General and few or no tags."
+            "You organise purchase receipts. Suggest only metadata supported by the supplied retailer and item names. Never invent products, events, warranties, or purposes. Use a concise category and up to three short tags. If evidence is weak, use General and few or no tags."
         }
 
         let items = itemNames.prefix(40).joined(separator: ", ")

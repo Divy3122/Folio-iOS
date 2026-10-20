@@ -4,6 +4,17 @@ struct ReceiptLibraryView: View {
     @State private var model: ReceiptLibraryViewModel
     private let services: ReceiptLibraryServices
 
+    @State private var isSelecting = false
+    @State private var selectedIDs: Set<UUID> = []
+    @State private var showDeleteConfirmation = false
+    @State private var isDeleting = false
+    @State private var showAgentSearch = false
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12)
+    ]
+
     init(services: ReceiptLibraryServices) {
         self.services = services
         _model = State(initialValue: ReceiptLibraryViewModel(services: services))
@@ -14,9 +25,24 @@ struct ReceiptLibraryView: View {
             content
                 .navigationTitle("Receipts")
                 .searchable(text: $model.searchText, prompt: "Search retailer, item or tag")
-                .toolbar { filterMenu }
+                .toolbar { toolbarContent }
                 .navigationDestination(for: ReceiptRecord.self) { record in
                     ReceiptDetailView(record: record, services: services)
+                }
+                .sheet(isPresented: $showAgentSearch) {
+                    AgenticSearchSheetView(services: services)
+                }
+                .confirmationDialog(
+                    "Delete \(selectedIDs.count) \(selectedIDs.count == 1 ? "receipt" : "receipts")?",
+                    isPresented: $showDeleteConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Delete", role: .destructive) {
+                        Task { await deleteSelectedReceipts() }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This action cannot be undone.")
                 }
                 .task(id: model.query) { await model.reload() }
                 .task { await seedSamplesOnce() }
@@ -36,17 +62,38 @@ struct ReceiptLibraryView: View {
                 Button("Try again") { Task { await model.reload() } }
             }
         case .loaded:
-            if model.records.isEmpty { emptyState } else { receiptList }
+            if model.records.isEmpty { emptyState } else { receiptGrid }
         }
     }
 
-    private var receiptList: some View {
-        List(model.records) { record in
-            NavigationLink(value: record) {
-                ReceiptRowView(record: record)
+    private var receiptGrid: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(model.records) { record in
+                    if isSelecting {
+                        Button {
+                            toggleSelection(for: record.id)
+                        } label: {
+                            ReceiptCubeView(
+                                record: record,
+                                isSelecting: true,
+                                isSelected: selectedIDs.contains(record.id)
+                            )
+                        }
+                        .buttonStyle(CubeButtonStyle())
+                    } else {
+                        NavigationLink(value: record) {
+                            ReceiptCubeView(record: record)
+                        }
+                        .buttonStyle(CubeButtonStyle())
+                    }
+                }
             }
+            .padding(16)
         }
-        .refreshable { await model.reload() }
+        .refreshable {
+            if !isSelecting { await model.reload() }
+        }
     }
 
     @ViewBuilder private var emptyState: some View {
@@ -61,32 +108,109 @@ struct ReceiptLibraryView: View {
         }
     }
 
-    @ToolbarContentBuilder private var filterMenu: some ToolbarContent {
+    @ToolbarContentBuilder private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
-            Menu {
-                Picker("Profile", selection: $model.profile) {
-                    Text("All profiles").tag(PurchaseProfile?.none)
-                    ForEach(PurchaseProfile.allCases, id: \.self) { profile in
-                        Text(profile.rawValue.capitalized).tag(PurchaseProfile?.some(profile))
-                    }
+            HStack(spacing: 12) {
+                // Apple Intelligence Agentic Search Button
+                Button {
+                    showAgentSearch = true
+                } label: {
+                    Label("AI Assistant", systemImage: "sparkles")
+                        .font(.headline)
+                        .foregroundStyle(Color.accentColor)
                 }
-                Picker("Sort by", selection: $model.sort) {
-                    ForEach(ReceiptFilter.Sort.menuOrder, id: \.self) { sort in
-                        Text(sort.title).tag(sort)
+
+                // Batch Deletion Trash Button
+                Button(role: .destructive) {
+                    if isSelecting {
+                        if !selectedIDs.isEmpty {
+                            showDeleteConfirmation = true
+                        } else {
+                            withAnimation { isSelecting = false }
+                        }
+                    } else {
+                        withAnimation { isSelecting = true }
                     }
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                        .foregroundStyle(selectedIDs.isEmpty && isSelecting ? Color.secondary : Color.red)
                 }
-                #if DEBUG
-                Button("Add sample receipts") {
-                    Task {
-                        _ = try? await ReceiptLibrarySampleData.seed(into: services)
-                        await model.reload()
+                .disabled(model.records.isEmpty || isDeleting)
+
+                // Select / Cancel Mode Toggle
+                if isSelecting {
+                    Button(selectedIDs.count == model.records.count ? "Deselect All" : "Select All") {
+                        if selectedIDs.count == model.records.count {
+                            selectedIDs.removeAll()
+                        } else {
+                            selectedIDs = Set(model.records.map(\.id))
+                        }
                     }
+                    .font(.subheadline.weight(.semibold))
+
+                    Button("Done") {
+                        withAnimation {
+                            isSelecting = false
+                            selectedIDs.removeAll()
+                        }
+                    }
+                    .bold()
+                } else {
+                    filterMenu
                 }
-                #endif
-            } label: {
-                Label("Filter and sort", systemImage: "line.3.horizontal.decrease.circle")
             }
         }
+    }
+
+    private var filterMenu: some View {
+        Menu {
+            Picker("Profile", selection: $model.profile) {
+                Text("All profiles").tag(PurchaseProfile?.none)
+                ForEach(PurchaseProfile.allCases, id: \.self) { profile in
+                    Text(profile.rawValue.capitalized).tag(PurchaseProfile?.some(profile))
+                }
+            }
+            Picker("Sort by", selection: $model.sort) {
+                ForEach(ReceiptFilter.Sort.menuOrder, id: \.self) { sort in
+                    Text(sort.title).tag(sort)
+                }
+            }
+            #if DEBUG
+            Button("Add sample receipts") {
+                Task {
+                    _ = try? await ReceiptLibrarySampleData.seed(into: services)
+                    await model.reload()
+                }
+            }
+            #endif
+        } label: {
+            Label("Filter and sort", systemImage: "line.3.horizontal.decrease.circle")
+        }
+    }
+
+    private func toggleSelection(for id: UUID) {
+        if selectedIDs.contains(id) {
+            selectedIDs.remove(id)
+        } else {
+            selectedIDs.insert(id)
+        }
+    }
+
+    private func deleteSelectedReceipts() async {
+        guard !selectedIDs.isEmpty else { return }
+        isDeleting = true
+        defer { isDeleting = false }
+
+        for id in selectedIDs {
+            try? await services.repository.delete(id: id)
+            try? await services.reminders?.delete(id: id)
+            try? await services.scheduler?.cancel(id: id)
+            try? services.images.delete(receiptID: id)
+        }
+
+        selectedIDs.removeAll()
+        withAnimation { isSelecting = false }
+        await model.reload()
     }
 
     private func seedSamplesOnce() async {
@@ -97,6 +221,15 @@ struct ReceiptLibraryView: View {
         UserDefaults.standard.set(true, forKey: key)
         await model.reload()
         #endif
+    }
+}
+
+private struct CubeButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .opacity(configuration.isPressed ? 0.9 : 1.0)
+            .animation(.easeInOut(duration: 0.15), value: configuration.isPressed)
     }
 }
 

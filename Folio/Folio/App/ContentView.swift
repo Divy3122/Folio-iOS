@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 @MainActor @Observable final class AppViewModel {
     private(set) var dependencies: DependencyContainer?
@@ -7,14 +8,24 @@ import SwiftUI
 
     func load() {
         guard dependencies == nil else { return }
+        
+        UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
+        
         do {
             let loaded = try DependencyContainer.live()
-            let services = try ReceiptLibraryServices(container: loaded, scheduler: NotificationReminderScheduler())
-            ReceiptSavingContext.current = ReceiptSavingContext(services: services, saveReceipt: loaded.saveReceipt)
+            let services = try ReceiptLibraryServices(container: loaded, scheduler: loaded.scheduler)
+            
+            ReceiptSavingContext.current = ReceiptSavingContext(
+                services: services,
+                saveReceipt: loaded.saveReceipt
+            )
+            
             library = services
             dependencies = loaded
             errorMessage = nil
-        } catch { errorMessage = error.localizedDescription }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }
 

@@ -83,6 +83,9 @@ struct ReceiptScannerView: View {
                                 .frame(maxWidth: .infinity).padding(.vertical, 8)
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(
+                            ReceiptAmountParser.parse(viewModel.review.total) == nil
+                            )
                         .padding()
                         .background(.bar)
                     }
