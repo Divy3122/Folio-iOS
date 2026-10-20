@@ -40,28 +40,84 @@ enum ReceiptCostValidator {
         check(draft.fees, "Additional fees", allowNegative: true)
         check(draft.rounding, "Rounding", allowNegative: true)
         check(draft.total, "Final total", allowNegative: true)
-        guard let total = costs.total else {
-            warnings.append("Final total is missing or unreadable. Enter the printed total; it will not be inferred from products.")
+        let tolerance = Decimal(string: "0.01")!
+        let allLineCostsAvailable = !costs.products.isEmpty &&
+            costs.products.allSatisfy { $0.lineTotal != nil }
+        let sum = costs.products.reduce(Decimal.zero) { $0 + ($1.lineTotal ?? 0) }
+        let discount = costs.discountTreatment == .deductedFromLines ? (costs.discounts ?? 0) : 0
+        let fees = costs.fees ?? 0
+        let rounding = costs.rounding ?? 0
+        let tax = costs.tax ?? 0
+
+        let withoutAdditionalTax = sum - discount + fees + rounding
+        let withAdditionalTax = withoutAdditionalTax + tax
+        let printedTotal = costs.total
+
+        let subtotalAgreesWithProducts = costs.subtotal.map {
+            abs($0 - sum) <= tolerance
+        } ?? false
+        let matchesIncluded = printedTotal.map {
+            abs(withoutAdditionalTax - $0) <= tolerance
+        } ?? false
+        let matchesAdded = printedTotal.map {
+            abs(withAdditionalTax - $0) <= tolerance
+        } ?? false
+
+        // Only use arithmetic to resolve an unknown tax treatment if ALL input
+        // fields are valid AND independently printed subtotal/total figures
+        // support exactly one interpretation. Otherwise require confirmation.
+        // This check happens BEFORE the early return for invalid fields, so a
+        // genuinely unknown GST treatment is not silently hidden by another error.
+        let canInferTaxTreatment = warnings.isEmpty &&
+            allLineCostsAvailable &&
+            costs.subtotal != nil &&
+            subtotalAgreesWithProducts &&
+            printedTotal != nil &&
+            costs.tax != nil && tax != 0 &&
+            matchesIncluded != matchesAdded
+
+        if costs.taxTreatment == .unknown,
+           costs.tax != nil, tax != 0,
+           !canInferTaxTreatment {
+            warnings.append(
+                "Confirm whether GST / tax is included or added separately before reconciling the total."
+            )
+        }
+        if costs.discounts != nil && costs.discounts != 0 &&
+            costs.discountTreatment == .unknown {
+            warnings.append(
+                "Confirm whether discounts are already included in line costs before reconciling the total."
+            )
+        }
+        guard let total = printedTotal else {
+            warnings.append(
+                "Final total is missing or unreadable. Enter the printed total; it will not be inferred from products."
+            )
             return warnings
         }
-        if costs.tax != nil && costs.tax != 0 && costs.taxTreatment == .unknown {
-            warnings.append("Confirm whether GST / tax is already included before reconciling the total.")
-        }
-        if costs.discounts != nil && costs.discounts != 0 && costs.discountTreatment == .unknown {
-            warnings.append("Confirm whether discounts are already included in line costs before reconciling the total.")
-        }
-        // Do not present a numeric reconciliation when any edit is invalid or treatment is unknown.
-        guard warnings.isEmpty, !costs.products.isEmpty,
-              costs.products.allSatisfy({ $0.lineTotal != nil }) else {
+
+        // Missing prices, ambiguous tax treatment, and invalid user edits must
+        // not produce a misleading numeric reconciliation.
+        guard warnings.isEmpty && allLineCostsAvailable else {
             warnings.append("Total cannot be fully reconciled until the flagged fields are reviewed.")
             return warnings
         }
-        let sum = costs.products.reduce(Decimal.zero) { $0 + ($1.lineTotal ?? 0) }
-        let discount = costs.discountTreatment == .deductedFromLines ? (costs.discounts ?? 0) : 0
-        let tax = costs.taxTreatment == .added ? (costs.tax ?? 0) : 0
-        let expected = sum - discount + tax + (costs.fees ?? 0) + (costs.rounding ?? 0)
-        if abs(expected - total) > Decimal(string: "0.01")! {
-            warnings.append("Product costs and entered adjustments differ from the final total by \(ReceiptAmountParser.text(abs(expected - total))). Check missing products, discounts, fees, tax and rounding. The final total has been kept unchanged.")
+
+        let effectiveTaxTreatment: ReceiptCostBreakdown.TaxTreatment
+        if tax == 0 {
+            effectiveTaxTreatment = .included // There is no additional tax to add.
+        } else if canInferTaxTreatment {
+            effectiveTaxTreatment = matchesAdded ? .added : .included
+        } else {
+            effectiveTaxTreatment = costs.taxTreatment
+        }
+
+        let expected = effectiveTaxTreatment == .added ?
+            withAdditionalTax : withoutAdditionalTax
+        if abs(expected - total) > tolerance {
+            warnings.append(
+                "Product costs and entered adjustments differ from the final total by \(ReceiptAmountParser.text(abs(expected - total))). Check missing products, discounts, fees, tax and rounding. The final total has been kept unchanged."
+            )
         }
         // Subtotal can be printed before or after receipt-level discounts; accept either convention.
         if let subtotal = costs.subtotal,
@@ -72,3 +128,4 @@ enum ReceiptCostValidator {
         return warnings
     }
 }
+

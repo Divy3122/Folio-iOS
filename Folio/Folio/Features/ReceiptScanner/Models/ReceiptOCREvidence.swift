@@ -107,7 +107,8 @@ enum ReceiptOCREvidencePrompt {
         chunkStartLine: Int,
         chunkLines: [String],
         originalText: String,
-        pages: [ReceiptOCRPage]
+        pages: [ReceiptOCRPage],
+        selectedLines: Set<Int>? = nil
     ) -> String {
         guard !pages.isEmpty, renderedText(pages: pages) == originalText else {
             return numberedOCR
@@ -119,7 +120,7 @@ enum ReceiptOCREvidencePrompt {
             for line in page.lines {
                 if globalLine >= chunkStartLine && globalLine < chunkStartLine + chunkLines.count {
                     let offset = globalLine - chunkStartLine
-                    if line.text == chunkLines[offset] {
+                    if line.text == chunkLines[offset], selectedLines?.contains(globalLine) != false {
                         for fragment in line.fragments {
                             let alternatives = fragment.alternatives
                                 .filter { $0.text != fragment.text }

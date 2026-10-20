@@ -25,6 +25,116 @@ final class ReceiptScannerViewModel {
         }
     }
 
+    private(set) var companyReview = CompanyReview()
+    private(set) var availableCompanies: [Company] = []
+    private(set) var companyDebugReport = ""
+    private(set) var companyMessage: String?
+    private(set) var identifyingCompany = false
+    private(set) var confirmingCompany = false
+    private(set) var historicalReceipts: [PurchaseReceipt] = []
+    @ObservationIgnored private let companyIdentifier: (any ReceiptCompanyIdentifying)?
+    @ObservationIgnored private let companyRepository: (any CompanyRepository)?
+    @ObservationIgnored private let receiptRepository: (any ReceiptRepository)?
+    @ObservationIgnored private var companyTask: Task<Void, Never>?
+    @ObservationIgnored private var companyRevision = 0
+    @ObservationIgnored private var searchRevision = 0
+
+    func editCompanyName(_ name: String) {
+        companyRevision += 1
+        identifyingCompany = false
+        companyReview = CompanyReview(name: name, status: .suggested, message: "Manual retailer — confirm to link.")
+        hasDraftSession = true
+        scheduleSave()
+    }
+    func selectCompany(_ company: Company) {
+        guard company.confirmed else { proposeCompany(company); return }
+        companyRevision += 1
+        identifyingCompany = false
+        companyReview = CompanyReview(name: company.name, company: company, status: .confirmed, message: "Retailer confirmed for this receipt.")
+        hasDraftSession = true
+        scheduleSave()
+    }
+    func proposeCompany(_ company: Company) {
+        companyRevision += 1
+        identifyingCompany = false
+        companyReview = CompanyReview(name: company.name, company: company, status: .suggested, message: "Confirm this receipt issuer.")
+        scheduleSave()
+    }
+    func confirmCompany() async {
+        guard !confirmingCompany else { return }
+        confirmingCompany = true
+        defer { confirmingCompany = false }
+        companyRevision += 1
+        identifyingCompany = false
+        let revision = companyRevision
+        let proposal = companyReview.company ?? Company(name: companyReview.name)
+        guard let companyRepository else { companyMessage = "Company storage is unavailable."; return }
+        do {
+            let company = try await ConfirmCompany(repository: companyRepository)(proposal)
+            guard revision == companyRevision else { return }
+            selectCompany(company)
+            await loadCompanies()
+        } catch { companyMessage = "Retailer could not be saved. Select an existing identity or try again." }
+    }
+    func loadCompanies() async {
+        do {
+            availableCompanies = try await companyRepository?.fetchAll() ?? []
+            if companyReview.status == .confirmed, let latest = availableCompanies.first(where: { $0.id == companyReview.company?.id }) {
+                companyReview.company = latest
+            }
+        }
+        catch { companyMessage = "Saved retailers could not be loaded." }
+    }
+    func searchPurchases(_ query: String) async {
+        guard let receiptRepository, let companyRepository else { return }
+        searchRevision += 1
+        let revision = searchRevision
+        do {
+            let results = try await SearchCompanyPurchases(receipts: receiptRepository, companies: companyRepository)(query)
+            guard revision == searchRevision, !Task.isCancelled else { return }
+            historicalReceipts = results
+        }
+        catch { companyMessage = "Saved purchases could not be searched." }
+    }
+    /// The permanent receipt editor calls this before its existing SaveReceipt use case.
+    func associateCompany(with receipt: PurchaseReceipt) throws -> PurchaseReceipt {
+        guard companyReview.status == .confirmed, let company = companyReview.company else { return receipt }
+        return try AssociateReceiptCompany()(receipt, company: company)
+    }
+    private func resetCompany() {
+        companyTask?.cancel()
+        companyRevision += 1
+        companyReview = CompanyReview()
+        companyMessage = nil
+        companyDebugReport = ""
+        identifyingCompany = false
+    }
+    private func startCompanyIdentification() {
+        guard let companyIdentifier else { return }
+        let revision = companyRevision
+        let text = extractedText
+        let pages = ocrEvidencePages
+        identifyingCompany = true
+        companyTask = Task { [weak self] in
+            guard let self else { return }
+            await loadCompanies()
+            var proposals: [Company] = []
+            do { proposals = try await companyIdentifier.identify(text: text, pages: pages) }
+            catch { if revision == companyRevision { companyMessage = "Retailer identification unavailable. Select or enter a retailer." } }
+            guard revision == companyRevision, !Task.isCancelled else { return }
+            if proposals.isEmpty { proposals = CompanyMatching.offline(text: text, records: availableCompanies) }
+            companyReview = CompanyMatching.review(proposals, records: availableCompanies)
+            #if DEBUG
+            let trace = await (companyIdentifier as? ReceiptCompanyIdentifier)?.debugSnapshot() ?? []
+            guard revision == companyRevision, !Task.isCancelled else { return }
+            companyDebugReport = (trace + ["Company match: \(companyReview.status.rawValue); records: \(availableCompanies.count)",
+                "Review retailer: \(companyReview.name.isEmpty ? "Unknown Retailer" : companyReview.name)"]).joined(separator: "\n")
+            #endif
+            identifyingCompany = false
+            scheduleSave()
+        }
+    }
+
     private var hasDraftSession = false
 
     @ObservationIgnored private let recognizer: any ReceiptTextRecognizing
@@ -38,17 +148,26 @@ final class ReceiptScannerViewModel {
 
     init(recognizer: any ReceiptTextRecognizing = VisionReceiptTextRecognizer(),
          extractor: any ReceiptExtracting = FoundationModelsReceiptExtractor.live(),
-         draftStore: ReceiptScannerDraftStore? = .live()) {
+         draftStore: ReceiptScannerDraftStore? = .live(),
+         companyIdentifier: (any ReceiptCompanyIdentifying)? = nil,
+         companies: (any CompanyRepository)? = nil,
+         receipts: (any ReceiptRepository)? = nil) {
         self.recognizer = recognizer
         self.extractor = extractor
         self.draftStore = draftStore
+        self.companyIdentifier = companyIdentifier
+        self.companyRepository = companies
+        self.receiptRepository = receipts
     }
 
-    var warnings: [String] { extractionWarnings + ReceiptCostValidator.warnings(for: review) }
+    // The simplified review only asks for product names/prices and printed totals.
+    // Model guesses about tax, shipping, fees or discounts are not user-facing warnings.
+    var warnings: [String] { ReceiptSimpleTotals.basicWarnings(for: review) }
     var hasReview: Bool { hasDraftSession || !originalPages.isEmpty || !extractedText.isEmpty || !review.products.isEmpty }
 
     func beginManualReceipt() {
         guard !isProcessing else { return }
+        resetCompany()
         editRevision += 1
         hasDraftSession = true
         originalPages = []
@@ -74,6 +193,7 @@ final class ReceiptScannerViewModel {
     func process(pages: [Data]) async {
         guard !isProcessing else { return }
         guard !pages.isEmpty else { reportError(ScannerError.noPages); return }
+        resetCompany()
         isProcessing = true
         processingMessage = "Recognising receipt text…"
         hasDraftSession = true
@@ -125,7 +245,9 @@ final class ReceiptScannerViewModel {
             errorMessage = ScannerError.noReadableText.localizedDescription
             return
         }
-        processingMessage = "Extracting receipt costs on device…"
+        // The store name and receipt date are entered manually in Receipt Review.
+        // Do not make a second AI call to identify the company.
+        processingMessage = "Extracting receipt products on device…"
         do {
             let result: ReceiptExtractionResult
             if let evidenceExtractor = extractor as? any ReceiptEvidenceExtracting {
@@ -161,9 +283,22 @@ final class ReceiptScannerViewModel {
                 #endif
                 return
             }
-            if let costs = result.costBreakdown { apply(ReceiptReviewDraft(costs)) }
+            // Retain the existing product extraction, but ignore AI-generated
+            // subtotal/tax/discount/fee interpretations. Read only the explicitly
+            // printed subtotal and final total from OCR. The UI calculates the
+            // single adjustment row as final total minus subtotal.
+            var draft: ReceiptReviewDraft
+            if let costs = result.costBreakdown {
+                draft = ReceiptReviewDraft(costs)
+            } else {
+                draft = ReceiptReviewDraft()
+            }
+            ReceiptSimpleTotals.simplify(&draft, ocrText: extractedText)
+            apply(draft)
             #if DEBUG
-            pipelineDebugReport += "\nREVIEW STATE | products: \(review.products.count) | final total: \(review.total.isEmpty ? "EMPTY" : review.total)"
+            let simpleAmounts = ReceiptSimpleTotals.read(ocrText: extractedText)
+            pipelineDebugReport += "\nSIMPLE TOTALS | printed subtotal: \(simpleAmounts.subtotal.map { String(describing: $0) } ?? "missing") | printed total: \(simpleAmounts.total.map { String(describing: $0) } ?? "missing") | additional fees/adjustments: \(simpleAmounts.additionalFees.map { String(describing: $0) } ?? "missing")"
+            pipelineDebugReport += "\nREVIEW STATE | products: \(review.products.count) | subtotal: \(review.subtotal.isEmpty ? "EMPTY" : review.subtotal) | final total: \(review.total.isEmpty ? "EMPTY" : review.total)"
             #endif
         } catch is CancellationError {
             extractionWarnings.append("Extraction cancelled. Enter costs manually using the retained OCR and images.")
@@ -198,6 +333,7 @@ final class ReceiptScannerViewModel {
             ocrEvidencePages = snapshot.ocrEvidence ?? []
             extractionWarnings = snapshot.extractionWarnings
             apply(snapshot.review)
+            companyReview = snapshot.company ?? CompanyReview()
         } catch { storageWarning = "The previous review could not be loaded. Its file has not been deleted." }
     }
 
@@ -215,7 +351,7 @@ final class ReceiptScannerViewModel {
         guard let draftStore, hasReview else { return }
         let snapshot = ReceiptScannerDraftStore.Snapshot(rawText: extractedText, pages: originalPages,
             review: review, extractionWarnings: extractionWarnings,
-            ocrEvidence: ocrEvidencePages)
+            ocrEvidence: ocrEvidencePages, company: companyReview)
         do {
             try await draftStore.save(snapshot)
             storageWarning = nil
@@ -225,4 +361,5 @@ final class ReceiptScannerViewModel {
     func reportError(_ error: Error) { errorMessage = error.localizedDescription }
     func reportUnsupportedCamera() { errorMessage = "Document scanning is not available on this device." }
 }
+
 

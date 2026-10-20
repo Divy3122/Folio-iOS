@@ -74,7 +74,13 @@ enum ReceiptProductEvidenceVerifier {
     }
 
     private static func plausibleName(_ text: String) -> Bool {
-        ReceiptOCRRowKind.classify(text) == .product
+        ReceiptOCRRowKind.classify(text) == .product && !isPriceOnly(text)
+    }
+
+    private static func isPriceOnly(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let range = NSRange(trimmed.startIndex..., in: trimmed)
+        return amountPattern.firstMatch(in: trimmed, range: range)?.range == range
     }
 
     static func printedQuantity(in text: String) -> Decimal? {
@@ -94,21 +100,51 @@ enum ReceiptProductEvidenceVerifier {
         return prices.count == 1 ? prices.first?.price : nil
     }
 
-    /// True only for a likely *item row* that carries a price, not a receipt total.
-    /// Used to decide whether one narrow AI retry is worthwhile.
-    static func hasUnmappedPricedRow(
-        lines: [String],
-        startLine: Int,
-        mappedLines: Set<Int>
-    ) -> Bool {
-        for (index, line) in lines.enumerated() {
-            guard !mappedLines.contains(startLine + index),
-                  let firstPrice = amountTokens(in: line).first else { continue }
-            let name = String(line.prefix(upTo: firstPrice.start))
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if plausibleName(name) { return true }
+    /// Physical OCR coverage, not product count or receipt arithmetic, drives recovery.
+    static func retryLines(chunk: ReceiptOCRChunk, mapped: ReceiptExtractionMapper.Mapped) -> Set<Int> {
+        var covered = Set<Int>()
+        var targets = Set<Int>()
+        for item in mapped.anchoredProducts {
+            if item.product.lineTotal == nil { targets.insert(item.line); continue }
+            if let anchor = ReceiptExtractionMapper.productAnchor(name: item.product.name, sourceLine: item.line, chunk: chunk) {
+                let first = chunk.startLine + anchor.offset
+                covered.formUnion(first..<(first + anchor.context.components(separatedBy: .newlines).count))
+            }
         }
-        return false
+        for index in chunk.lines.indices {
+            let line = chunk.lines[index]
+            guard !covered.contains(chunk.startLine + index), !amountTokens(in: line).isEmpty else { continue }
+            let kind = ReceiptOCRRowKind.classify(line)
+            guard kind == .product || line.rangeOfCharacter(from: .letters) == nil ||
+                    line.trimmingCharacters(in: .whitespaces).range(of: #"^(?:AUD|USD|NZD|EUR|GBP)\s*[-+0-9]"#, options: .regularExpression) != nil else { continue }
+            if kind == .product && !isPriceOnly(line) { targets.insert(chunk.startLine + index) }
+            // Include unpriced wrapped descriptions, stopping at another priced
+            // product, a classified non-product row, or already verified coverage.
+            for previous in stride(from: index - 1, through: max(0, index - 2), by: -1) {
+                guard !covered.contains(chunk.startLine + previous),
+                      plausibleName(chunk.lines[previous]), amountTokens(in: chunk.lines[previous]).isEmpty else { break }
+                targets.insert(chunk.startLine + previous)
+            }
+        }
+        return targets
+    }
+
+    static func retryContext(chunk: ReceiptOCRChunk, targets: Set<Int>) -> (text: String, lines: Set<Int>) {
+        var selected = targets
+        for line in targets {
+            let offset = line - chunk.startLine
+            for next in (offset + 1)..<min(chunk.lines.count, offset + 4) {
+                let text = chunk.lines[next]
+                guard targets.contains(chunk.startLine + next) ||
+                      text.rangeOfCharacter(from: .letters) == nil ||
+                      text.range(of: #"^(?:AUD|USD|NZD|EUR|GBP)\s*[-+0-9]"#, options: .regularExpression) != nil else { break }
+                selected.insert(chunk.startLine + next)
+            }
+        }
+        let rows = chunk.lines.enumerated().compactMap { index, text in
+            selected.contains(chunk.startLine + index) ? "\(chunk.startLine + index): \(text)" : nil
+        }
+        return ("Investigate only these unmatched or unresolved product rows. Keep global line numbers; omitted lines are NOT adjacent.\n" + rows.joined(separator: "\n"), selected)
     }
 
     private struct PriceToken {
@@ -132,47 +168,43 @@ enum ReceiptProductEvidenceVerifier {
     static func verify(
         _ proposals: [FocusedReceiptProductProposal],
         lines: [String],
-        startLine: Int
+        startLine: Int,
+        allowedLines: Set<Int>? = nil,
+        diagnose: (String) -> Void = { _ in }
     ) -> [Verified] {
         var accepted: [Verified] = []
         var claimedLines = Set<Int>()
 
         for proposal in proposals {
             guard let resolved = ReceiptExtractionMapper.productAnchor(name: proposal.name,
-                sourceLine: proposal.sourceLine, chunk: .init(startLine: startLine, lines: lines)) else { continue }
+                sourceLine: proposal.sourceLine, chunk: .init(startLine: startLine, lines: lines)) else {
+                diagnose("Rejected \(proposal.name): identity is not a unique product anchor.")
+                continue
+            }
             let index = resolved.offset
             let resolvedLine = startLine + index
+            guard allowedLines?.contains(resolvedLine) != false else {
+                diagnose("Rejected \(proposal.name): row already verified or outside retry targets.")
+                continue
+            }
             guard lines.indices.contains(index),
                   !claimedLines.contains(resolvedLine),
                   plausibleName(proposal.name),
                   plausibleName(lines[index]),
                   let printed = proposal.lineTotal,
-                  let proposedAmount = ReceiptAmountParser.printed(printed) else { continue }
+                  let proposedAmount = ReceiptAmountParser.printed(printed) else {
+                diagnose("Rejected \(proposal.name): duplicate, non-product, or missing printed price.")
+                continue
+            }
 
-            let anchor = lines[index]
-            let following = index + 1 < lines.count ? lines[index + 1] : ""
-            let target = clean(proposal.name)
-            let anchorName = clean(anchor)
-            let combinedName = clean(anchor + " " + following)
-            guard !target.isEmpty,
-                  (anchorName.contains(target) || combinedName.contains(target)) else { continue }
-
-            // A price belonging to a different product on the next line must
-            // never be assigned to this one. Only a price-only continuation is safe.
-            let mainPrices = amountTokens(in: anchor)
-            let nextTrimmed = following.trimmingCharacters(in: .whitespacesAndNewlines)
-            let continuation = mainPrices.isEmpty && (
-                nextTrimmed.rangeOfCharacter(from: .letters) == nil ||
-                (!anchorName.contains(target) && combinedName.contains(target))
-            )
-            let prices = continuation
-                ? amountTokens(in: following)
-                : mainPrices
-
-            // On multi-price rows, the final printed amount is the line cost.
-            // Don't mistake a unit price for the final extended line cost.
+            // Reuse the mapper's verified identity/continuation span. The old
+            // second two-line check discarded valid three-line and currency-code rows.
+            let prices = amountTokens(in: resolved.context)
             guard let printedLineCost = prices.last?.price,
-                  printedLineCost == proposedAmount else { continue }
+                  printedLineCost == proposedAmount else {
+                diagnose("Rejected \(proposal.name): proposed price is not the printed line cost.")
+                continue
+            }
 
             var quantity: Decimal? = printedQuantity(in: resolved.context)
             if let token = proposal.quantity,
@@ -181,7 +213,7 @@ enum ReceiptProductEvidenceVerifier {
                 // Never derive it from the line price.
                 let escaped = NSRegularExpression.escapedPattern(for: token)
                 let pattern = #"(?i)(?:[x×]\s*"# + escaped + #"\b|\b"# + escaped + #"\s*[x×]|\b"# + escaped + #"\s*(?:kg|g|l|ml)\b)"#
-                if (anchor + " " + following).range(of: pattern, options: .regularExpression) != nil {
+                if resolved.context.range(of: pattern, options: .regularExpression) != nil {
                     quantity = value
                 }
             }
@@ -197,7 +229,8 @@ enum ReceiptProductEvidenceVerifier {
                     isReturn: false
                 )
             ))
-            claimedLines.insert(resolvedLine)
+            claimedLines.formUnion(resolvedLine..<(resolvedLine + resolved.context.components(separatedBy: .newlines).count))
+            diagnose("Accepted \(proposal.name) at OCR line \(resolvedLine): \(proposedAmount).")
         }
         return accepted
     }
@@ -223,8 +256,7 @@ enum ReceiptProductEvidenceVerifier {
                     anchored[index].product.quantity = candidate.product.quantity
                 }
             } else if !anchored.contains(where: {
-                $0.line == candidate.line ||
-                (clean($0.product.name) == candidateName && abs($0.line - candidate.line) <= 1)
+                $0.line == candidate.line
             }) {
                 anchored.append((line: candidate.line, product: candidate.product))
             }

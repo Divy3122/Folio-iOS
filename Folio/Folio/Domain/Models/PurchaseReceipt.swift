@@ -2,6 +2,7 @@ import Foundation
 
 struct Retailer: Codable, Equatable, Sendable {
     var name: String
+    var companyID: UUID? = nil
 }
 
 struct PurchasedItem: Identifiable, Codable, Equatable, Sendable {
@@ -9,6 +10,7 @@ struct PurchasedItem: Identifiable, Codable, Equatable, Sendable {
     var name: String
     var quantity: Int
     var unitPrice: Decimal
+    var companyAssociations: [PurchaseCompanyAssociation]? = nil
 }
 
 enum PurchaseProfile: String, Codable, Sendable, CaseIterable {
