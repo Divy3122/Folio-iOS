@@ -3,11 +3,14 @@ import Observation
 
 extension SavedRetailer {
     var defaultReturnPolicyID: UUID? {
-        policies.filter { $0.kind == .returns }.min { $0.windowDays < $1.windowDays }?.id
+        policies
+            .filter { $0.kind == .returns }
+            .min { $0.windowDays < $1.windowDays }?.id
     }
 
     var defaultWarrantyMonths: Int {
-        policies.first { $0.kind == .warranty }.map { WarrantyLength.months(days: $0.windowDays) } ?? 0
+        policies.first { $0.kind == .warranty }
+            .map { WarrantyLength.months(days: $0.windowDays) } ?? 0
     }
 }
 
@@ -25,11 +28,19 @@ enum WarrantyLength {
 
     static func describe(months: Int) -> String {
         guard months > 0 else { return "None" }
+
         let years = months / 12
         let rest = months % 12
         var parts: [String] = []
-        if years > 0 { parts.append(years == 1 ? "1 year" : "\(years) years") }
-        if rest > 0 { parts.append(rest == 1 ? "1 month" : "\(rest) months") }
+
+        if years > 0 {
+            parts.append(years == 1 ? "1 year" : "\(years) years")
+        }
+
+        if rest > 0 {
+            parts.append(rest == 1 ? "1 month" : "\(rest) months")
+        }
+
         return parts.joined(separator: " ")
     }
 }
@@ -49,25 +60,41 @@ final class RetailerBrowserViewModel {
 
     var groups: [LetterGroup] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filtered = query.isEmpty ? retailers : retailers.filter { $0.name.localizedCaseInsensitiveContains(query) }
-        let grouped = Dictionary(grouping: filtered) { Self.letter(for: $0.name) }
+        let filtered = query.isEmpty
+            ? retailers
+            : retailers.filter {
+                $0.name.localizedCaseInsensitiveContains(query)
+            }
+
+        let grouped = Dictionary(grouping: filtered) {
+            Self.letter(for: $0.name)
+        }
+
         let letters = grouped.keys.sorted { lhs, rhs in
             if lhs == "#" { return false }
             if rhs == "#" { return true }
             return lhs < rhs
         }
-        return letters.map { LetterGroup(letter: $0, retailers: grouped[$0] ?? []) }
+
+        return letters.map {
+            LetterGroup(letter: $0, retailers: grouped[$0] ?? [])
+        }
     }
 
-    private var manage: ManageRetailers? { ReceiptSavingContext.current?.services.manageRetailers }
+    private var manage: ManageRetailers? {
+        ReceiptSavingContext.current?.services.manageRetailers
+    }
 
-    func retailer(id: UUID) -> SavedRetailer? { retailers.first { $0.id == id } }
+    func retailer(id: UUID) -> SavedRetailer? {
+        retailers.first { $0.id == id }
+    }
 
     func load() async {
         guard let manage else {
             errorMessage = "Retailer storage isn't available."
             return
         }
+
         do {
             retailers = try await manage.all()
             hasLoaded = true
@@ -77,29 +104,40 @@ final class RetailerBrowserViewModel {
     }
 
     func save(_ retailer: SavedRetailer) async throws {
-        guard let manage else { throw FolioError.persistenceFailure }
+        guard let manage else {
+            throw FolioError.persistenceFailure
+        }
+
         try await manage.save(retailer)
         retailers = try await manage.all()
     }
 
     func delete(id: UUID) async throws {
-        guard let manage else { throw FolioError.persistenceFailure }
+        guard let manage else {
+            throw FolioError.persistenceFailure
+        }
+
         try await manage.delete(id: id)
         retailers = try await manage.all()
     }
 
     private static func letter(for name: String) -> String {
-        guard let first = name.trimmingCharacters(in: .whitespacesAndNewlines).first, first.isLetter else { return "#" }
+        guard let first = name.trimmingCharacters(in: .whitespacesAndNewlines).first,
+              first.isLetter else {
+            return "#"
+        }
+
         return String(first).uppercased()
     }
 }
 
 struct RetailerBrowserView: View {
-    typealias Choose = (SavedRetailer, UUID?, Int) -> Void
+    typealias Choose = (SavedRetailer, [SavedPolicy]) -> Void
 
     @State private var model = RetailerBrowserViewModel()
     @State private var showingNewRetailer = false
     @Environment(\.dismiss) private var dismiss
+
     private let onChoose: Choose
 
     init(onChoose: @escaping Choose) {
@@ -125,35 +163,56 @@ struct RetailerBrowserView: View {
             .searchable(text: $model.searchText, prompt: "Search retailers")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
+                    Button("Close") {
+                        dismiss()
+                    }
                 }
+
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Add retailer", systemImage: "plus") { showingNewRetailer = true }
+                    Button("Add retailer", systemImage: "plus") {
+                        showingNewRetailer = true
+                    }
                 }
             }
             .navigationDestination(for: UUID.self) { id in
-                RetailerDetailView(retailerID: id, model: model, onChoose: onChoose, finish: { dismiss() })
+                RetailerDetailView(
+                    retailerID: id,
+                    model: model,
+                    onChoose: onChoose,
+                    finish: { dismiss() }
+                )
             }
             .sheet(isPresented: $showingNewRetailer) {
                 NewRetailerView(model: model)
             }
-            .alert("Retailers", isPresented: Binding(
-                get: { model.errorMessage != nil },
-                set: { if !$0 { model.errorMessage = nil } }
-            )) {
+            .alert(
+                "Retailers",
+                isPresented: Binding(
+                    get: { model.errorMessage != nil },
+                    set: { if !$0 { model.errorMessage = nil } }
+                )
+            ) {
                 Button("OK") {}
             } message: {
                 Text(model.errorMessage ?? "")
             }
-            .task { await model.load() }
+            .task {
+                await model.load()
+            }
         }
     }
 
-    @ViewBuilder private var emptyState: some View {
+    @ViewBuilder
+    private var emptyState: some View {
         if model.hasLoaded && model.groups.isEmpty {
             if model.searchText.isEmpty {
-                ContentUnavailableView("No saved retailers", systemImage: "storefront",
-                                       description: Text("Tap + to add a retailer and its return and warranty policies."))
+                ContentUnavailableView(
+                    "No saved retailers",
+                    systemImage: "storefront",
+                    description: Text(
+                        "Tap + to add a retailer and its return and warranty policies."
+                    )
+                )
             } else {
                 ContentUnavailableView.search(text: model.searchText)
             }
@@ -166,24 +225,35 @@ private struct RetailerRow: View {
 
     private var summary: String {
         var parts: [String] = []
+
         let returns = retailer.policies.filter { $0.kind == .returns }
+
         if returns.count == 1, let only = returns.first {
             parts.append("Returns \(only.windowDays) days")
         } else if returns.count > 1 {
             parts.append("\(returns.count) return policies")
         }
+
         if retailer.defaultWarrantyMonths > 0 {
-            parts.append("Warranty \(WarrantyLength.describe(months: retailer.defaultWarrantyMonths))")
+            parts.append(
+                "Warranty \(WarrantyLength.describe(months: retailer.defaultWarrantyMonths))"
+            )
         }
+
         return parts.isEmpty ? "No policies yet" : parts.joined(separator: " · ")
     }
 
     var body: some View {
         HStack(spacing: 12) {
             RetailerAvatar(name: retailer.name, size: 40)
+
             VStack(alignment: .leading, spacing: 2) {
-                Text(retailer.name).font(.headline)
-                Text(summary).font(.caption).foregroundStyle(.secondary)
+                Text(retailer.name)
+                    .font(.headline)
+
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .accessibilityElement(children: .combine)
@@ -195,7 +265,10 @@ struct RetailerAvatar: View {
     var size: CGFloat = 40
 
     private var initial: String {
-        guard let first = name.trimmingCharacters(in: .whitespacesAndNewlines).first else { return "?" }
+        guard let first = name.trimmingCharacters(in: .whitespacesAndNewlines).first else {
+            return "?"
+        }
+
         return String(first).uppercased()
     }
 
@@ -218,21 +291,26 @@ struct RetailerDetailView: View {
     @State private var isEditing = false
     @State private var name = ""
     @State private var drafts: [PolicyDraft] = []
-    @State private var returnPolicyID: UUID?
-    @State private var warrantyMonths = 0
+    @State private var selectedPolicyIDs: Set<UUID> = []
+    @State private var didLoad = false
     @State private var confirmDelete = false
     @State private var errorMessage: String?
-    @State private var didLoad = false
+
     @Environment(\.dismiss) private var dismiss
 
-    private var retailer: SavedRetailer? { model.retailer(id: retailerID) }
+    private var retailer: SavedRetailer? {
+        model.retailer(id: retailerID)
+    }
 
     var body: some View {
         Group {
             if let retailer {
                 content(for: retailer)
             } else {
-                ContentUnavailableView("Retailer not found", systemImage: "storefront")
+                ContentUnavailableView(
+                    "Retailer not found",
+                    systemImage: "storefront"
+                )
             }
         }
         .navigationTitle(isEditing ? "Edit retailer" : "")
@@ -247,22 +325,39 @@ struct RetailerDetailView: View {
                     }
                 }
             }
+
             ToolbarItem(placement: .primaryAction) {
                 if isEditing {
                     Button("Done") {
-                        if let retailer { Task { await saveEdits(retailer) } }
+                        if let retailer {
+                            Task {
+                                await saveEdits(retailer)
+                            }
+                        }
                     }
                 } else if let retailer {
-                    Button("Edit") { beginEditing(retailer) }
+                    Button("Edit") {
+                        beginEditing(retailer)
+                    }
                 }
             }
         }
-        .confirmationDialog("Delete this retailer?", isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button("Delete retailer", role: .destructive) { Task { await deleteRetailer() } }
+        .confirmationDialog(
+            "Delete this retailer?",
+            isPresented: $confirmDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete retailer", role: .destructive) {
+                Task {
+                    await deleteRetailer()
+                }
+            }
         } message: {
             Text("Receipts you have already saved keep their own copy of these policies.")
         }
-        .onAppear { loadDefaultsIfNeeded() }
+        .onAppear {
+            loadDefaultsIfNeeded()
+        }
     }
 
     private func content(for retailer: SavedRetailer) -> some View {
@@ -270,12 +365,15 @@ struct RetailerDetailView: View {
             Section {
                 HStack {
                     Spacer()
+
                     VStack(spacing: 8) {
                         RetailerAvatar(name: retailer.name, size: 88)
+
                         Text(retailer.name)
                             .font(.title2.bold())
                             .multilineTextAlignment(.center)
                     }
+
                     Spacer()
                 }
                 .listRowBackground(Color.clear)
@@ -283,13 +381,26 @@ struct RetailerDetailView: View {
 
             if isEditing {
                 RetailerEditForm(name: $name, policies: $drafts)
+
                 Section {
-                    Button("Delete retailer", role: .destructive) { confirmDelete = true }
+                    Button("Delete retailer", role: .destructive) {
+                        confirmDelete = true
+                    }
                 }
             } else {
-                returnPolicySection(for: retailer)
-                warrantySection
-                Section { PolicyLiabilityNotice() }
+                policySelectionSection(
+                    title: "Return policies",
+                    policies: retailer.policies.filter { $0.kind == .returns }
+                )
+
+                policySelectionSection(
+                    title: "Warranties",
+                    policies: retailer.policies.filter { $0.kind == .warranty }
+                )
+
+                Section {
+                    PolicyLiabilityNotice()
+                }
             }
 
             if let errorMessage {
@@ -302,12 +413,19 @@ struct RetailerDetailView: View {
         .safeAreaInset(edge: .bottom) {
             if !isEditing {
                 Button {
-                    onChoose(retailer, returnPolicyID, warrantyMonths)
+                    let selectedPolicies = retailer.policies.filter {
+                        selectedPolicyIDs.contains($0.id)
+                    }
+
+                    onChoose(retailer, selectedPolicies)
                     finish()
                 } label: {
-                    Label("Use for this receipt", systemImage: "checkmark.circle.fill")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
+                    Label(
+                        "Use for this receipt",
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
                 }
                 .buttonStyle(.borderedProminent)
                 .padding()
@@ -316,69 +434,79 @@ struct RetailerDetailView: View {
         }
     }
 
-    private func returnPolicySection(for retailer: SavedRetailer) -> some View {
-        let returns = retailer.policies.filter { $0.kind == .returns }
-        return Section("Return policy") {
-            if returns.isEmpty {
-                Text("No return policies saved. Choose Edit to add one.")
+    private func policySelectionSection(
+        title: String,
+        policies: [SavedPolicy]
+    ) -> some View {
+        Section {
+            if policies.isEmpty {
+                Text("No \(title.lowercased()) saved.")
                     .foregroundStyle(.secondary)
             }
-            ForEach(returns) { policy in
-                Button {
-                    returnPolicyID = policy.id
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(policy.title).foregroundStyle(.primary)
-                            Text(detail(for: policy)).font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if returnPolicyID == policy.id {
-                            Image(systemName: "checkmark").foregroundStyle(.tint)
-                        }
-                    }
-                }
-                .accessibilityAddTraits(returnPolicyID == policy.id ? .isSelected : [])
-            }
-            if !returns.isEmpty {
-                Button {
-                    returnPolicyID = nil
-                } label: {
-                    HStack {
-                        Text("No return policy for this receipt").foregroundStyle(.primary)
-                        Spacer()
-                        if returnPolicyID == nil {
-                            Image(systemName: "checkmark").foregroundStyle(.tint)
-                        }
-                    }
-                }
-                .accessibilityAddTraits(returnPolicyID == nil ? .isSelected : [])
-            }
-        }
-    }
 
-    private var warrantySection: some View {
-        Section {
-            Stepper(value: $warrantyMonths, in: 0...WarrantyLength.maxMonths) {
-                LabeledContent("Warranty length", value: WarrantyLength.describe(months: warrantyMonths))
+            ForEach(policies) { policy in
+                Button {
+                    if selectedPolicyIDs.contains(policy.id) {
+                        selectedPolicyIDs.remove(policy.id)
+                    } else {
+                        selectedPolicyIDs.insert(policy.id)
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(
+                            systemName: selectedPolicyIDs.contains(policy.id)
+                                ? "checkmark.circle.fill"
+                                : "circle"
+                        )
+                        .font(.title3)
+                        .foregroundStyle(
+                            selectedPolicyIDs.contains(policy.id)
+                                ? Color.accentColor
+                                : Color.secondary
+                        )
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(policy.title)
+                                .foregroundStyle(.primary)
+
+                            Text("\(policy.windowDays) days")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+
+                            if !policy.notes
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                                .isEmpty {
+                                Text(policy.notes)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(
+                    selectedPolicyIDs.contains(policy.id) ? .isSelected : []
+                )
             }
         } header: {
-            Text("Warranty")
+            Text(title)
         } footer: {
-            Text("Set how long the warranty lasts for this receipt. It starts on the purchase date.")
+            Text("Select the policies you want saved with this receipt.")
         }
-    }
-
-    private func detail(for policy: SavedPolicy) -> String {
-        let days = "\(policy.windowDays) days"
-        return policy.notes.isEmpty ? days : "\(days) · \(policy.notes)"
     }
 
     private func loadDefaultsIfNeeded() {
         guard !didLoad, let retailer else { return }
         didLoad = true
-        returnPolicyID = retailer.defaultReturnPolicyID
-        warrantyMonths = retailer.defaultWarrantyMonths
+
+        // Start with the default return policy selected.
+        // Select any warranties you want to attach to this receipt.
+        if let defaultID = retailer.defaultReturnPolicyID {
+            selectedPolicyIDs.insert(defaultID)
+        }
     }
 
     private func beginEditing(_ retailer: SavedRetailer) {
@@ -393,16 +521,25 @@ struct RetailerDetailView: View {
             errorMessage = RetailerError.invalidPolicy.localizedDescription
             return
         }
+
         var updated = retailer
         updated.name = name
         updated.policies = drafts.compactMap(\.saved)
+
         do {
             try await model.save(updated)
+
             errorMessage = nil
             isEditing = false
+
             if let fresh = model.retailer(id: retailerID) {
-                returnPolicyID = fresh.defaultReturnPolicyID
-                warrantyMonths = fresh.defaultWarrantyMonths
+                let validIDs = Set(fresh.policies.map(\.id))
+                selectedPolicyIDs.formIntersection(validIDs)
+
+                if selectedPolicyIDs.isEmpty,
+                   let defaultID = fresh.defaultReturnPolicyID {
+                    selectedPolicyIDs.insert(defaultID)
+                }
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -421,6 +558,7 @@ struct RetailerDetailView: View {
 
 private struct NewRetailerView: View {
     let model: RetailerBrowserViewModel
+
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var drafts: [PolicyDraft] = []
@@ -431,6 +569,7 @@ private struct NewRetailerView: View {
         NavigationStack {
             List {
                 RetailerEditForm(name: $name, policies: $drafts)
+
                 if let errorMessage {
                     Section {
                         Label(errorMessage, systemImage: "exclamationmark.triangle")
@@ -442,14 +581,23 @@ private struct NewRetailerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") {
+                        dismiss()
+                    }
                 }
+
                 ToolbarItem(placement: .confirmationAction) {
                     if isSaving {
                         ProgressView()
                     } else {
-                        Button("Save") { Task { await save() } }
-                            .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        Button("Save") {
+                            Task {
+                                await save()
+                            }
+                        }
+                        .disabled(
+                            name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        )
                     }
                 }
             }
@@ -462,17 +610,24 @@ private struct NewRetailerView: View {
             errorMessage = RetailerError.invalidPolicy.localizedDescription
             return
         }
+
         isSaving = true
         defer { isSaving = false }
+
         do {
-            try await model.save(SavedRetailer(name: name, policies: drafts.compactMap(\.saved)))
+            try await model.save(
+                SavedRetailer(
+                    name: name,
+                    policies: drafts.compactMap(\.saved)
+                )
+            )
+
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 }
-
 
 struct RetailerEditForm: View {
     @Binding var name: String
@@ -546,8 +701,6 @@ struct RetailerEditForm: View {
     }
 }
 
-
-
 struct PolicyEditor: View {
     @Binding var draft: PolicyDraft
     var showsApplies = true
@@ -574,7 +727,7 @@ struct PolicyEditor: View {
             }
 
             TextField(
-                fixedKind == .warranty ? "Warranty name" : "Policy name",
+                effectiveKind == .warranty ? "Warranty name" : "Policy name",
                 text: $draft.title
             )
             .textInputAutocapitalization(.words)
@@ -596,6 +749,11 @@ struct PolicyEditor: View {
                 .buttonStyle(.borderless)
         }
         .padding(.vertical, 6)
+        .onAppear {
+            if let fixedKind {
+                draft.kind = fixedKind
+            }
+        }
         .onChange(of: draft.kind) { _, newKind in
             if newKind == .warranty {
                 draft.warrantyUnit = .days
@@ -649,10 +807,7 @@ struct PolicyEditor: View {
 
             HStack(spacing: 0) {
                 Picker("Duration", selection: $draft.warrantyValue) {
-                    ForEach(
-                        1...draft.warrantyUnit.maximum,
-                        id: \.self
-                    ) { value in
+                    ForEach(1...draft.warrantyUnit.maximum, id: \.self) { value in
                         Text("\(value)").tag(value)
                     }
                 }
@@ -685,7 +840,6 @@ struct PolicyEditor: View {
         }
     }
 }
-
 
 struct PolicyLiabilityNotice: View {
     var body: some View {
