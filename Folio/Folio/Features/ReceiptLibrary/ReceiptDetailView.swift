@@ -56,27 +56,27 @@ struct ReceiptDetailView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                // MARK: - 1. Scanned Receipt Gallery
-                if currentRecord.metadata.imageCount > 0 {
-                    scannedDocumentSection
-                }
-
-                // MARK: - 2. Hero Summary Card
+                // MARK: - 1. Hero Summary Card
                 heroHeaderCard
 
-                // MARK: - 3. Policy & Warranty Status Cards
+                // MARK: - 2. Policy & Warranty Status Cards
                 if hasActivePolicies {
                     policyStatusSection
                 }
 
-                // MARK: - 4. Purchased Items
+                // MARK: - 3. Purchased Items
                 if !receipt.items.isEmpty {
                     itemsSection
                 }
 
-                // MARK: - 5. Cost Breakdown
+                // MARK: - 4. Cost Breakdown
                 if !costRows.isEmpty {
                     costBreakdownSection
+                }
+
+                // MARK: - 5. Scanned Receipt Gallery
+                if currentRecord.metadata.imageCount > 0 {
+                    scannedDocumentSection
                 }
 
                 // MARK: - 6. Metadata & Notes
@@ -98,27 +98,27 @@ struct ReceiptDetailView: View {
             }
             .padding(16)
         }
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle(receipt.retailer.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                HStack(spacing: 12) {
-                    if let firstImage = loadedImages.first {
-                        ShareLink(
-                            item: Image(uiImage: firstImage),
-                            preview: SharePreview("\(receipt.retailer.name) Receipt", image: Image(uiImage: firstImage))
-                        ) {
-                            Image(systemName: "square.and.arrow.up")
-                                .foregroundStyle(Color.BrandTeal)
-                        }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if let firstImage = loadedImages.first {
+                    ShareLink(
+                        item: Image(uiImage: firstImage),
+                        preview: SharePreview("\(receipt.retailer.name) Receipt", image: Image(uiImage: firstImage))
+                    ) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(Color.BrandTeal)
                     }
-
-                    Button("Edit") {
-                        isEditing = true
-                    }
-                    .bold()
-                    .foregroundStyle(Color.BrandTeal)
                 }
+
+                Button("Edit") {
+                    isEditing = true
+                }
+                .font(.body.weight(.bold))
+                .foregroundStyle(Color.BrandTeal)
             }
         }
         .sheet(isPresented: $isEditing, onDismiss: {
@@ -161,6 +161,7 @@ struct ReceiptDetailView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(receipt.retailer.name)
                         .font(.title2.weight(.bold))
+                        .foregroundStyle(Color.primary)
 
                     HStack(spacing: 6) {
                         Image(systemName: "calendar")
@@ -189,6 +190,7 @@ struct ReceiptDetailView: View {
                         .foregroundStyle(Color.secondary)
                     Text(formattedTotal)
                         .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.primary)
                 }
 
                 Spacer()
@@ -205,7 +207,11 @@ struct ReceiptDetailView: View {
             }
         }
         .padding(18)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
     }
 
     private func urgencyColor(_ urgency: ReceiptExpiryUrgency) -> Color {
@@ -227,6 +233,7 @@ struct ReceiptDetailView: View {
             HStack {
                 Text("Policies & Coverage")
                     .font(.headline)
+                    .foregroundStyle(Color.primary)
                 Spacer()
                 Button("Edit Policies") {
                     isEditing = true
@@ -236,7 +243,8 @@ struct ReceiptDetailView: View {
             }
 
             VStack(spacing: 10) {
-                if let returnPolicy = receipt.returnPolicy {
+                if let returnPolicy = receipt.returnPolicy,
+                   !currentRecord.metadata.policies.contains(where: { $0.kind == .returns }) {
                     let deadline = Calendar.current.date(byAdding: .day, value: returnPolicy.windowDays, to: receipt.purchasedAt)
                     let key = currentRecord.id
 
@@ -255,9 +263,9 @@ struct ReceiptDetailView: View {
 
                     PolicyDetailRow(
                         title: policy.title,
-                        subtitle: policy.kind == .warranty ? "Warranty Protection" : "Return Policy",
+                        subtitle: policy.kind == .warranty ? "Warranty Protection" : "\(policy.windowDays) Days Return Policy",
                         deadline: deadline,
-                        icon: policy.kind == .warranty ? "checkmark.shield.fill" : "doc.text.fill",
+                        icon: policy.kind == .warranty ? "checkmark.shield.fill" : "arrow.uturn.backward.circle.fill",
                         hasReminder: activeReminders[key] != nil
                     )
                 }
@@ -272,6 +280,7 @@ struct ReceiptDetailView: View {
             HStack {
                 Text("Scanned Receipt")
                     .font(.headline)
+                    .foregroundStyle(Color.primary)
                 Spacer()
                 Text("\(currentRecord.metadata.imageCount) \(currentRecord.metadata.imageCount == 1 ? "page" : "pages")")
                     .font(.caption)
@@ -293,7 +302,7 @@ struct ReceiptDetailView: View {
                                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                                .stroke(Color(.separator), lineWidth: 1)
+                                                .stroke(Color.primary.opacity(0.12), lineWidth: 1)
                                         )
 
                                     Text("Page \(index + 1)")
@@ -314,7 +323,11 @@ struct ReceiptDetailView: View {
                     .foregroundStyle(Color.secondary)
                     .padding()
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                    )
             } else {
                 ProgressView("Loading scans…")
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -329,6 +342,7 @@ struct ReceiptDetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Purchased Items")
                 .font(.headline)
+                .foregroundStyle(Color.primary)
 
             VStack(spacing: 0) {
                 ForEach(Array(receipt.items.enumerated()), id: \.element.id) { index, item in
@@ -336,6 +350,7 @@ struct ReceiptDetailView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.name)
                                 .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Color.primary)
 
                             if item.quantity > 1 {
                                 Text("\(item.quantity) × \(item.unitPrice.formatted(.currency(code: receipt.currencyCode))) each")
@@ -349,6 +364,7 @@ struct ReceiptDetailView: View {
                         Text((item.unitPrice * Decimal(item.quantity)).formatted(.currency(code: receipt.currencyCode)))
                             .font(.subheadline.weight(.bold))
                             .monospacedDigit()
+                            .foregroundStyle(Color.primary)
                     }
                     .padding(.vertical, 12)
                     .padding(.horizontal, 16)
@@ -358,7 +374,11 @@ struct ReceiptDetailView: View {
                     }
                 }
             }
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            )
         }
     }
 
@@ -368,6 +388,7 @@ struct ReceiptDetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Cost Breakdown")
                 .font(.headline)
+                .foregroundStyle(Color.primary)
 
             VStack(spacing: 8) {
                 ForEach(costRows, id: \.label) { row in
@@ -379,11 +400,16 @@ struct ReceiptDetailView: View {
                         Text(row.value.formatted(.currency(code: receipt.currencyCode)))
                             .font(.subheadline.weight(.medium))
                             .monospacedDigit()
+                            .foregroundStyle(Color.primary)
                     }
                 }
             }
             .padding(16)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            )
         }
     }
 
@@ -393,6 +419,7 @@ struct ReceiptDetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Details & Notes")
                 .font(.headline)
+                .foregroundStyle(Color.primary)
 
             VStack(alignment: .leading, spacing: 14) {
                 if !currentRecord.metadata.category.isEmpty {
@@ -403,6 +430,7 @@ struct ReceiptDetailView: View {
                         Spacer()
                         Text(currentRecord.metadata.category)
                             .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.primary)
                     }
                 }
 
@@ -414,14 +442,19 @@ struct ReceiptDetailView: View {
 
                         Text(currentRecord.metadata.notes)
                             .font(.subheadline)
+                            .foregroundStyle(Color.primary)
                             .padding(10)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                 }
             }
             .padding(16)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            )
         }
     }
 
@@ -440,7 +473,6 @@ struct ReceiptDetailView: View {
     }
 
     private func refreshRecordAndReminders() async {
-        // FIX: Replaced non-existent `services.fetchRecord` with `services.repository.fetch`
         if let updated = try? await services.repository.fetchRecord(id: currentRecord.id) {
             currentRecord = updated
         }
@@ -499,6 +531,7 @@ private struct PolicyDetailRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.primary)
                     Text(subtitle)
                         .font(.caption)
                         .foregroundStyle(Color.secondary)
@@ -530,7 +563,11 @@ private struct PolicyDetailRow: View {
             }
         }
         .padding(14)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
     }
 }
 

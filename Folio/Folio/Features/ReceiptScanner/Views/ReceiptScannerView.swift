@@ -107,6 +107,7 @@ struct ReceiptScannerView: View {
                 }
                 .padding(.horizontal, 24)
                 .frame(maxWidth: .infinity)
+                .containerRelativeFrame(.vertical)
             }
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(isPresented: $showingResults) {

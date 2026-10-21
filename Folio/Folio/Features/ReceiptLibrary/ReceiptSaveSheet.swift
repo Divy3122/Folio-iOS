@@ -42,7 +42,12 @@ final class ReceiptSaveViewModel {
     private var hasRequestedSuggestions = false
     private var appliedPolicies: [AppliedPolicy] = []
 
-    init(costs: ReceiptCostBreakdown, pages: [Data], source: ReceiptMetadata.ExtractionSource? = nil, existingRecord: ReceiptRecord? = nil) {
+    init(
+        costs: ReceiptCostBreakdown,
+        pages: [Data],
+        source: ReceiptMetadata.ExtractionSource? = nil,
+        existingRecord: ReceiptRecord? = nil
+    ) {
         let preferred = Locale.current.currency?.identifier ?? "AUD"
         var seen = Set<String>()
         currencies = [preferred, "AUD", "USD", "EUR", "GBP", "NZD"].filter { seen.insert($0).inserted }
@@ -60,13 +65,32 @@ final class ReceiptSaveViewModel {
             self.category = existingRecord.metadata.category
             self.tagsText = existingRecord.metadata.tags.joined(separator: ", ")
             
-            self.policyDrafts = existingRecord.metadata.policies.map { applied in
+            var drafts: [PolicyDraft] = []
+            
+            // 1. Map all policies stored in metadata
+            for applied in existingRecord.metadata.policies {
                 let saved = SavedPolicy(kind: applied.kind, title: applied.title, windowDays: applied.windowDays, notes: applied.notes)
                 var draft = PolicyDraft(saved)
                 draft.title = applied.title
                 draft.applies = true
-                return draft
+                draft.isConfirmed = true
+                draft.isEditing = false
+                drafts.append(draft)
             }
+            
+            // 2. Fallback: synthesize return policy from receipt.returnPolicy if absent from metadata
+            if let returnPolicy = r.returnPolicy,
+               !drafts.contains(where: { $0.kind == .returns }) {
+                let saved = SavedPolicy(kind: .returns, title: "Return Policy", windowDays: returnPolicy.windowDays, notes: returnPolicy.notes)
+                var draft = PolicyDraft(saved)
+                draft.title = "Return Policy"
+                draft.applies = true
+                draft.isConfirmed = true
+                draft.isEditing = false
+                drafts.append(draft)
+            }
+            
+            self.policyDrafts = drafts
         } else {
             self.isEditingExistingRecord = false
             self.receiptID = UUID()
@@ -203,7 +227,6 @@ final class ReceiptSaveViewModel {
         do {
             if rememberRetailer && selectedRetailerID == nil { try await rememberCurrentRetailer(using: context) }
             
-            // Skip duplicate detection when updating an existing record
             if !isEditingExistingRecord && !ignoringDuplicates, !(try await context.services.detectDuplicate(receipt)).isEmpty {
                 showDuplicatePrompt = true
                 phase = .editing
@@ -220,7 +243,6 @@ final class ReceiptSaveViewModel {
             let activeReminderDrafts = policyDrafts.filter { $0.applies && $0.setReminder }
             
             if let reminderRepo = context.services.reminders {
-                // Clear old scheduled reminders for this receipt if updating
                 if isEditingExistingRecord {
                     if let existingReminders = try? await reminderRepo.fetchAll() {
                         for r in existingReminders where r.receiptID == receiptID {
@@ -410,7 +432,6 @@ struct ReceiptSaveSheet: View {
                 }
             }
 
-            // Legal liability protection notice placed directly above policy sections
             Section { PolicyLiabilityNotice() }
 
             PolicySections(drafts: $model.policyDrafts, showsApplies: true, purchaseDate: model.date)
