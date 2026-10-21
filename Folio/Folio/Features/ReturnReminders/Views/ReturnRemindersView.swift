@@ -112,6 +112,8 @@ struct ReturnRemindersView: View {
     var receipts: [PurchaseReceipt]
     init(receipts: [PurchaseReceipt]) { self.receipts = receipts }
     func save(_ receipt: PurchaseReceipt) async throws { receipts.append(receipt) }
+    func update(_ receipt: PurchaseReceipt) async throws {
+    }
     func fetchAll() async throws -> [PurchaseReceipt] { receipts }
 }
 

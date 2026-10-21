@@ -37,6 +37,23 @@ import Foundation
     var deleteReceipt: DeleteReceipt {
         DeleteReceipt(repository: repository, images: images, reminders: reminders, scheduler: scheduler)
     }
+
+    // MARK: - Direct Record & Receipt Access
+
+    func fetchRecord(id: UUID) async throws -> ReceiptRecord? {
+        try await repository.fetchRecord(id: id)
+    }
+
+    func updateReceipt(_ receipt: PurchaseReceipt) async throws {
+        var record = try await repository.fetchRecord(id: receipt.id) ?? ReceiptRecord(receipt: receipt)
+        record.receipt = receipt
+        record.metadata.updatedAt = Date()
+        try await repository.save(record)
+    }
+
+    func saveRecord(_ record: ReceiptRecord) async throws {
+        try await repository.save(record)
+    }
 }
 
 @MainActor final class InMemoryRetailerRepository: RetailerRepository {

@@ -34,22 +34,48 @@ final class ReceiptSaveViewModel {
     private(set) var errorMessage: String?
     let currencies: [String]
 
-    private let receiptID = UUID()
+    let isEditingExistingRecord: Bool
+    private let receiptID: UUID
     private let costs: ReceiptCostBreakdown
     private let pages: [Data]
     private let source: ReceiptMetadata.ExtractionSource?
     private var hasRequestedSuggestions = false
     private var appliedPolicies: [AppliedPolicy] = []
 
-    init(costs: ReceiptCostBreakdown, pages: [Data], source: ReceiptMetadata.ExtractionSource? = nil) {
+    init(costs: ReceiptCostBreakdown, pages: [Data], source: ReceiptMetadata.ExtractionSource? = nil, existingRecord: ReceiptRecord? = nil) {
         let preferred = Locale.current.currency?.identifier ?? "AUD"
         var seen = Set<String>()
         currencies = [preferred, "AUD", "USD", "EUR", "GBP", "NZD"].filter { seen.insert($0).inserted }
         currency = preferred
-        totalText = ReceiptAmountParser.text(costs.total)
+        
+        if let existingRecord {
+            self.isEditingExistingRecord = true
+            self.receiptID = existingRecord.id
+            let r = existingRecord.receipt
+            self.retailer = r.retailer.name
+            self.date = r.purchasedAt
+            self.currency = r.currencyCode
+            self.profile = r.profile
+            self.totalText = ReceiptAmountParser.text(r.total)
+            self.category = existingRecord.metadata.category
+            self.tagsText = existingRecord.metadata.tags.joined(separator: ", ")
+            
+            self.policyDrafts = existingRecord.metadata.policies.map { applied in
+                let saved = SavedPolicy(kind: applied.kind, title: applied.title, windowDays: applied.windowDays, notes: applied.notes)
+                var draft = PolicyDraft(saved)
+                draft.title = applied.title
+                draft.applies = true
+                return draft
+            }
+        } else {
+            self.isEditingExistingRecord = false
+            self.receiptID = UUID()
+            self.totalText = ReceiptAmountParser.text(costs.total)
+        }
+
         self.costs = costs
         self.pages = pages
-        self.source = source ?? (pages.isEmpty ? .manual : nil)
+        self.source = source ?? (pages.isEmpty && !isEditingExistingRecord ? .manual : nil)
     }
 
     var hasInvalidPolicyDrafts: Bool {
@@ -155,7 +181,7 @@ final class ReceiptSaveViewModel {
         metadataSuggestionMessage = nil
     }
 
-    // MARK: - Saving
+    // MARK: - Saving / Updating
 
     func save(ignoringDuplicates: Bool = false) async {
         errorMessage = nil
@@ -176,41 +202,60 @@ final class ReceiptSaveViewModel {
         phase = .saving
         do {
             if rememberRetailer && selectedRetailerID == nil { try await rememberCurrentRetailer(using: context) }
-            if !ignoringDuplicates, !(try await context.services.detectDuplicate(receipt)).isEmpty {
+            
+            // Skip duplicate detection when updating an existing record
+            if !isEditingExistingRecord && !ignoringDuplicates, !(try await context.services.detectDuplicate(receipt)).isEmpty {
                 showDuplicatePrompt = true
                 phase = .editing
                 return
             }
-            try await context.saveReceipt(receipt)
+            
+            if isEditingExistingRecord {
+                try await context.services.updateReceipt(receipt)
+            } else {
+                try await context.saveReceipt(receipt)
+            }
 
             // MARK: - Per-Policy Reminder Scheduling
             let activeReminderDrafts = policyDrafts.filter { $0.applies && $0.setReminder }
             
-            if !activeReminderDrafts.isEmpty, let reminderRepo = context.services.reminders {
-                var requestedAuth = false
-                var authGranted = true
-
-                for draft in activeReminderDrafts {
-                    guard let deadline = draft.deadline(from: date), deadline > Date.now else { continue }
-                    let reminder = ReturnReminder(receiptID: receiptID, deadline: deadline, notifyAt: draft.reminderDate)
-
-                    do {
-                        try await reminderRepo.save(reminder)
-
-                        if let scheduler = context.services.scheduler {
-                            if !requestedAuth {
-                                authGranted = try await scheduler.requestAuthorization()
-                                requestedAuth = true
-                            }
-                            if authGranted {
-                                try await scheduler.schedule(reminder)
-                            }
+            if let reminderRepo = context.services.reminders {
+                // Clear old scheduled reminders for this receipt if updating
+                if isEditingExistingRecord {
+                    if let existingReminders = try? await reminderRepo.fetchAll() {
+                        for r in existingReminders where r.receiptID == receiptID {
+                            try? await reminderRepo.delete(id: r.id)
+                            await context.services.scheduler?.cancel(id: r.id)
                         }
-                    } catch {
-                        // Non-fatal reminder failure
                     }
                 }
-                notificationsAllowed = authGranted
+
+                if !activeReminderDrafts.isEmpty {
+                    var requestedAuth = false
+                    var authGranted = true
+
+                    for draft in activeReminderDrafts {
+                        guard let deadline = draft.deadline(from: date), deadline > Date.now else { continue }
+                        let reminder = ReturnReminder(receiptID: receiptID, deadline: deadline, notifyAt: draft.reminderDate)
+
+                        do {
+                            try await reminderRepo.save(reminder)
+
+                            if let scheduler = context.services.scheduler {
+                                if !requestedAuth {
+                                    authGranted = try await scheduler.requestAuthorization()
+                                    requestedAuth = true
+                                }
+                                if authGranted {
+                                    try await scheduler.schedule(reminder)
+                                }
+                            }
+                        } catch {
+                            // Non-fatal reminder failure
+                        }
+                    }
+                    notificationsAllowed = authGranted
+                }
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -228,10 +273,14 @@ final class ReceiptSaveViewModel {
 
     private func attachDetails(using context: ReceiptSavingContext) async {
         do {
-            try await context.services.attachDetails(receiptID: receiptID, costs: costs, source: source, pages: pages)
+            if !pages.isEmpty {
+                try await context.services.attachDetails(receiptID: receiptID, costs: costs, source: source, pages: pages)
+            }
+            
             let categoryValue = category.trimmingCharacters(in: .whitespacesAndNewlines)
             let tags = tagsText.split { $0 == "," || $0 == "\n" }.map(String.init)
             let policies = appliedPolicies
+            
             try await context.services.updateMetadata(id: receiptID) { metadata in
                 metadata.category = categoryValue
                 metadata.tags = UpdateReceiptMetadata.normalised(tags)
@@ -279,14 +328,14 @@ struct ReceiptSaveSheet: View {
     @State private var showingRetailers = false
     @Environment(\.dismiss) private var dismiss
 
-    init(costs: ReceiptCostBreakdown, pages: [Data], source: ReceiptMetadata.ExtractionSource? = nil) {
-        _model = State(initialValue: ReceiptSaveViewModel(costs: costs, pages: pages, source: source))
+    init(costs: ReceiptCostBreakdown, pages: [Data], source: ReceiptMetadata.ExtractionSource? = nil, existingRecord: ReceiptRecord? = nil) {
+        _model = State(initialValue: ReceiptSaveViewModel(costs: costs, pages: pages, source: source, existingRecord: existingRecord))
     }
 
     var body: some View {
         NavigationStack {
             Group { if model.phase == .saved { savedView } else { form } }
-                .navigationTitle(model.phase == .saved ? "Saved" : "Save receipt")
+                .navigationTitle(model.phase == .saved ? (model.isEditingExistingRecord ? "Updated" : "Saved") : (model.isEditingExistingRecord ? "Edit receipt" : "Save receipt"))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
@@ -296,14 +345,14 @@ struct ReceiptSaveSheet: View {
                         if model.phase == .saving {
                             ProgressView()
                         } else if model.phase != .saved {
-                            Button("Save") { Task { await model.save() } }.disabled(!model.canSave)
+                            Button(model.isEditingExistingRecord ? "Update" : "Save") { Task { await model.save() } }.disabled(!model.canSave)
                         }
                     }
                 }
                 .disabled(model.phase == .saving)
                 .interactiveDismissDisabled(model.phase == .saving)
                 .task { await model.loadRetailers() }
-                .task { await model.suggestMetadataIfNeeded() }
+                .task { if !model.isEditingExistingRecord { await model.suggestMetadataIfNeeded() } }
                 .onChange(of: model.retailer) { model.retailerTextChanged() }
                 .sheet(isPresented: $showingRetailers, onDismiss: { Task { await model.loadRetailers() } }) {
                     RetailerBrowserView { saved, policies in
@@ -321,10 +370,10 @@ struct ReceiptSaveSheet: View {
 
     private var savedView: some View {
         ContentUnavailableView {
-            Label("Receipt saved", systemImage: "checkmark.circle")
+            Label(model.isEditingExistingRecord ? "Receipt updated" : "Receipt saved", systemImage: "checkmark.circle")
         } description: {
             VStack(spacing: 6) {
-                Text("Find it in the Receipts tab.")
+                Text(model.isEditingExistingRecord ? "Your changes have been saved." : "Find it in the Receipts tab.")
                 if model.hasActiveRemindersSet && !model.notificationsAllowed {
                     Text("Reminders saved, but notifications are off in iOS Settings.")
                         .font(.footnote)

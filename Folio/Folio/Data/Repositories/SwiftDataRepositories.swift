@@ -21,6 +21,21 @@ import SwiftData
         } catch { context.rollback(); throw FolioError.persistenceFailure }
     }
 
+    func update(_ receipt: PurchaseReceipt) async throws {
+        do {
+            guard var record = try existingRecord(id: receipt.id) else {
+                throw FolioError.persistenceFailure
+            }
+            record.receipt = receipt
+            record.metadata.updatedAt = Date()
+            try upsert(record)
+            try context.save()
+        } catch {
+            context.rollback()
+            throw FolioError.persistenceFailure
+        }
+    }
+
     func fetchAll() async throws -> [PurchaseReceipt] {
         do {
             return try context.fetch(FetchDescriptor<StoredReceipt>()).map { try decode($0).receipt }

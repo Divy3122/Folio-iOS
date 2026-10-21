@@ -9,7 +9,7 @@ import UserNotifications
 
 /// Presents return reminder banners and plays notification sounds even when the app is open in the foreground.
 final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
-    static let shared = NotificationDelegate()
+    @MainActor static let shared = NotificationDelegate()
     
     private override init() {
         super.init()

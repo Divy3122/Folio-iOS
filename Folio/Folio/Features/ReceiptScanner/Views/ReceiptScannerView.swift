@@ -19,52 +19,118 @@ struct ReceiptScannerView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 24) {
-                    Image(systemName: "doc.viewfinder")
-                        .font(.largeTitle).foregroundStyle(.tint)
-                        .accessibilityHidden(true)
-                    Text("Scan your receipt").font(.title.bold())
-                    Text("Capture all pages to see each product's cost and the total paid.")
-                        .foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Button {
-                        requestEntry(manual: false)
-                    } label: {
-                        Label("Scan Receipt", systemImage: "camera")
-                            .frame(maxWidth: .infinity).padding(.vertical, 8)
+                VStack(spacing: 28) {
+                    Spacer()
+
+                    // Hero Icon Header
+                    ZStack {
+                        Circle()
+                            .fill(Color.accentColor.opacity(0.12))
+                            .frame(width: 96, height: 96)
+                        
+                        Image(systemName: "doc.viewfinder")
+                            .font(.system(size: 42, weight: .medium))
+                            .foregroundStyle(Color.accentColor)
+                            .accessibilityHidden(true)
                     }
-                    .buttonStyle(.borderedProminent)
-                    Button("Enter receipt manually") { requestEntry(manual: true) }
+
+                    // Titles & Description
+                    VStack(spacing: 10) {
+                        Text("Scan your receipt")
+                            .font(.title.weight(.bold))
+                        
+                        Text("Capture all pages to see each product's cost and the total paid.")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
+                    }
+
+                    // Primary Actions
+                    VStack(spacing: 12) {
+                        Button {
+                            requestEntry(manual: false)
+                        } label: {
+                            Label("Scan Receipt", systemImage: "camera.fill")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .cornerRadius(14)
+
+                        Button {
+                            requestEntry(manual: true)
+                        } label: {
+                            Text("Enter receipt manually")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                        }
                         .buttonStyle(.bordered)
-                    if viewModel.hasReview {
-                        Button("Continue saved receipt") {
-                            isEditing = false
-                            showingResults = true
+                        .cornerRadius(14)
+
+                        if viewModel.hasReview {
+                            Button {
+                                isEditing = false
+                                showingResults = true
+                            } label: {
+                                Label("Continue saved receipt", systemImage: "arrow.right.circle.fill")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(Color.accentColor)
+                                    .padding(.top, 4)
+                            }
                         }
                     }
-                    if let error = viewModel.errorMessage {
-                        Label(error, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.red)
+                    .padding(.top, 8)
+
+                    // Feedback Notifications
+                    VStack(spacing: 12) {
+                        if let error = viewModel.errorMessage {
+                            Label(error, systemImage: "exclamationmark.triangle.fill")
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(.red)
+                                .padding(12)
+                                .frame(maxWidth: .infinity)
+                                .background(Color.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+
+                        if let warning = viewModel.storageWarning {
+                            Text(warning)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
                     }
-                    if let warning = viewModel.storageWarning {
-                        Text(warning).foregroundStyle(.secondary)
-                    }
+
+                    Spacer()
                 }
-                .padding(24)
+                .padding(.horizontal, 24)
+                .frame(maxWidth: .infinity)
             }
-            .navigationTitle("Receipt Scanner")
+            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(isPresented: $showingResults) {
                 Group {
                     if viewModel.isProcessing {
                         VStack(spacing: 20) {
                             ProgressView(viewModel.processingMessage)
+                                .controlSize(.large)
+
                             Text("Preparing the product breakdown and total cost from your receipt.")
-                                .foregroundStyle(.secondary).multilineTextAlignment(.center)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 32)
+
                             Button("Stop and review manually", role: .cancel) {
                                 isEditing = true
                                 viewModel.cancelProcessing()
                             }
+                            .buttonStyle(.bordered)
+                            .padding(.top, 8)
                         }
-                        .padding()
+                        .padding(24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         ReceiptCostReviewView(viewModel: viewModel, isEditing: isEditing)
                     }
@@ -79,14 +145,15 @@ struct ReceiptScannerView: View {
                 .safeAreaInset(edge: .bottom) {
                     if !viewModel.isProcessing {
                         Button { showingSave = true } label: {
-                            Label("Save to library", systemImage: "tray.and.arrow.down")
-                                .frame(maxWidth: .infinity).padding(.vertical, 8)
+                            Label("Save to library", systemImage: "tray.and.arrow.down.fill")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(
-                            ReceiptAmountParser.parse(viewModel.review.total) == nil
-                            )
-                        .padding()
+                        .cornerRadius(14)
+                        .disabled(ReceiptAmountParser.parse(viewModel.review.total) == nil)
+                        .padding(16)
                         .background(.bar)
                     }
                 }

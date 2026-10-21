@@ -12,6 +12,10 @@ import Testing
 // MARK: - Test doubles (fake repositories and scheduler)
 
 @MainActor private final class FakeReceiptRepository: ReceiptRepository {
+    func update(_ receipt: Folio.PurchaseReceipt) async throws {
+
+    }
+    
     var receipts: [PurchaseReceipt] = []
     func save(_ receipt: PurchaseReceipt) async throws {
         receipts.removeAll { $0.id == receipt.id }   // replace by id, like the real repository

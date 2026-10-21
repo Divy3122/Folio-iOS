@@ -204,7 +204,6 @@ struct ReceiptLibraryView: View {
         for id in selectedIDs {
             try? await services.repository.delete(id: id)
             try? await services.reminders?.delete(id: id)
-            try? await services.scheduler?.cancel(id: id)
             try? services.images.delete(receiptID: id)
         }
 

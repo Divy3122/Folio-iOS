@@ -112,6 +112,8 @@ struct CreateReminderView: View {
 // MARK: - Preview with sample data (never included in the release app)
 
 @MainActor private final class PreviewReceiptStore: ReceiptRepository {
+    func update(_ receipt: PurchaseReceipt) async throws {
+    }
     var receipts: [PurchaseReceipt]
     init(receipts: [PurchaseReceipt]) { self.receipts = receipts }
     // Replace an existing receipt with the same id, like the real repository does

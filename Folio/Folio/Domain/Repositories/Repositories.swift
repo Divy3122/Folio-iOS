@@ -2,6 +2,7 @@ import Foundation
 
 @MainActor protocol ReceiptRepository {
     func save(_ receipt: PurchaseReceipt) async throws
+    func update(_ receipt: PurchaseReceipt) async throws
     func fetchAll() async throws -> [PurchaseReceipt]
 }
 
@@ -24,5 +25,4 @@ protocol ReceiptExtracting: Sendable {
     func requestAuthorization() async throws -> Bool
     func schedule(_ reminder: ReturnReminder) async throws
     func cancel(id: UUID) async
-    
 }
