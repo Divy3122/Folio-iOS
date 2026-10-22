@@ -213,17 +213,22 @@ struct ReceiptLibraryView: View {
         isDeleting = true
         defer { isDeleting = false }
 
+        let deleteUseCase = DeleteReceipt(
+            repository: services.repository,
+            images: services.images,
+            reminders: services.reminders,
+            scheduler: services.scheduler
+        )
+
         for id in selectedIDs {
-            try? await services.repository.delete(id: id)
-            try? await services.reminders?.delete(id: id)
-            try? services.images.delete(receiptID: id)
+            try? await deleteUseCase(id: id)
         }
 
         selectedIDs.removeAll()
         withAnimation { isSelecting = false }
         await model.reload()
     }
-
+    
     private func seedSamplesOnce() async {
         #if DEBUG
         let key = "ReceiptLibrarySamplesSeeded"

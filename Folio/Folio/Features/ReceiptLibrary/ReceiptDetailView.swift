@@ -501,9 +501,19 @@ struct ReceiptDetailView: View {
         isDeleting = true
         defer { isDeleting = false }
 
-        try? await services.repository.delete(id: currentRecord.id)
-        try? services.images.delete(receiptID: currentRecord.id)
-        dismiss()
+        let useCase = DeleteReceipt(
+            repository: services.repository,
+            images: services.images,
+            reminders: services.reminders,
+            scheduler: services.scheduler
+        )
+
+        do {
+            try await useCase(id: currentRecord.id)
+            dismiss()
+        } catch {
+            print("Failed to delete receipt: \(error.localizedDescription)")
+        }
     }
 }
 
