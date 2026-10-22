@@ -48,12 +48,10 @@ struct ContentView: View {
             } else if model.dependencies != nil {
                 TabView {
                     NavigationStack {
-                        if let dependencies = model.dependencies {
-                            SpendingDashboardView(container: dependencies)
-                        }
+                        ReceiptScannerView()
                     }
                     .tabItem {
-                        Label("Home", systemImage: "house")
+                        Label("Scan", systemImage: "camera")
                     }
 
                     NavigationStack {
@@ -65,11 +63,13 @@ struct ContentView: View {
                         Label("Receipts", systemImage: "receipt")
                     }
 
-                        NavigationStack {
-                        ReceiptScannerView()
+                    NavigationStack {
+                        if let dependencies = model.dependencies {
+                            SpendingDashboardView(container: dependencies)
+                        }
                     }
                     .tabItem {
-                        Label("Scan", systemImage: "camera")
+                        Label("Insights", systemImage: "chart.bar.fill")
                     }
                 }
                 .tint(.BrandTeal)
