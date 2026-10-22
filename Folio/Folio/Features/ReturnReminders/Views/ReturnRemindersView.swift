@@ -7,32 +7,40 @@
 
 import SwiftUI
 
-/// One row in the reminders list: retailer, deadline and status.
+/// One reminder shown as a card, matching the Receipts tab style.
 struct ReminderRowView: View {
     let summary: ReminderSummary
     
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                // Retailer name as the main line
+        HStack(spacing: 12) {
+            // Store initial in a circle, same component as the Receipts tab
+            RetailerAvatar(name: summary.retailerName, size: 40)
+            
+            VStack(alignment: .leading, spacing: 3) {
                 Text(summary.retailerName)
                     .font(.headline)
+                    .foregroundStyle(Color.PrimaryText)
+                    .lineLimit(1)
                 
-                // Deadline date underneath, in smaller grey text
                 Text("Return by \(summary.deadline.formatted(date: .abbreviated, time: .omitted))")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                    .foregroundStyle(Color.SecondaryText)
             }
             
             Spacer()
             
-            // Status badge on the right, e.g. "2 days left" in amber
-            Text(summary.status.label)
-                .font(.subheadline.weight(.semibold))
+            // Status badge: icon + label in a coloured capsule
+            Label(summary.status.label, systemImage: summary.status.iconName)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
                 .foregroundStyle(summary.status.colour)
+                .background(summary.status.colour.opacity(0.15), in: Capsule())
         }
-        .padding(.vertical, 4)
-        // VoiceOver reads the whole row as one item instead of three separate pieces
+        .padding(14)
+        .background(Color.CardBackground, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .shadow(color: Color.black.opacity(0.08), radius: 6, x: 0, y: 3)
+        // VoiceOver reads the whole card as one item
         .accessibilityElement(children: .combine)
     }
 }
@@ -51,11 +59,21 @@ extension ReturnReminderStatus {
         }
     }
     
+    // Team colours from Resources/Colors.swift, so Light and Dark Mode are handled
     var colour: Color {
         switch self {
-        case .upcoming: return .secondary
-        case .dueSoon:  return .orange   // stand-in for WarningAmber
-        case .expired:  return .red   // stand-in for ErrorRed
+        case .upcoming: return .SuccessGreen
+        case .dueSoon:  return .WarningAmber
+        case .expired:  return .ErrorRed
+        }
+    }
+    
+    // Matches the icons used on the Receipts tab cards
+    var iconName: String {
+        switch self {
+        case .upcoming: return "shield.checkmark.fill"
+        case .dueSoon:  return "exclamationmark.triangle.fill"
+        case .expired:  return "xmark.octagon.fill"
         }
     }
 }
@@ -91,13 +109,20 @@ struct ReturnRemindersView: View {
             case .loaded(let summaries):
                 List(summaries) { summary in
                     ReminderRowView(summary: summary)
-                    // Swipe left on a row to delete it
+                    // Hide the default row look so only the card shows
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    // Swipe left on a card to delete it
                         .swipeActions {
                             Button("Delete", role: .destructive) {
                                 Task { await viewModel.delete(id: summary.id) }
                             }
                         }
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(Color.AppBackground)
             }
         }
         .navigationTitle("Returns")
