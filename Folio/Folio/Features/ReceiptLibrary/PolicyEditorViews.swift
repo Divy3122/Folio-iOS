@@ -11,8 +11,11 @@ struct PolicyEditor: View {
     @Binding var draft: PolicyDraft
     var showsApplies = false
     var purchaseDate: Date? = nil
+    var hasExistingReminder = false
     let onRemove: () -> Void
+
     @State private var backup: PolicyDraft?
+    @State private var showingDuplicateReminderAlert = false
 
     var body: some View {
         Group {
@@ -195,7 +198,11 @@ struct PolicyEditor: View {
 
                 let baseDate = purchaseDate ?? Date()
                 if draft.applies, let deadline = draft.deadline(from: baseDate) {
-                    reminderView(for: deadline)
+                    reminderView(
+                        for: deadline,
+                        policyKind: draft.kind == .returns ? "return policy" : "warranty",
+                        hasExistingReminder: hasExistingReminder
+                    )
                 }
             }
         }
@@ -204,9 +211,14 @@ struct PolicyEditor: View {
     }
 
     @ViewBuilder
-    private func reminderView(for deadline: Date) -> some View {
+    private func reminderView(
+        for deadline: Date,
+        policyKind: String? = nil,
+        hasExistingReminder: Bool = false
+    ) -> some View {
         let isPast = deadline <= Date.now
         let dateColor: Color = isPast ? Color.red : Color.primary
+        let kindText = policyKind ?? (draft.kind == .returns ? "return policy" : "warranty")
 
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -223,7 +235,13 @@ struct PolicyEditor: View {
                 Toggle("Create reminder", isOn: $draft.setReminder)
                     .font(.subheadline)
                     .onChange(of: draft.setReminder) { _, enabled in
-                        if enabled { updateDefaultReminderDate(for: deadline) }
+                        if enabled {
+                            if hasExistingReminder {
+                                showingDuplicateReminderAlert = true
+                            } else {
+                                updateDefaultReminderDate(for: deadline)
+                            }
+                        }
                     }
 
                 if draft.setReminder {
@@ -241,6 +259,19 @@ struct PolicyEditor: View {
             }
         }
         .padding(.top, 4)
+        .alert(
+            "Existing Reminder Found",
+            isPresented: $showingDuplicateReminderAlert
+        ) {
+            Button("Add Another Reminder") {
+                updateDefaultReminderDate(for: deadline)
+            }
+            Button("Cancel", role: .cancel) {
+                draft.setReminder = false
+            }
+        } message: {
+            Text("A reminder is already scheduled for this receipt's \(kindText). Do you want to add another? To remove existing reminders, visit the Reminders tab.")
+        }
     }
 
     private func updateDefaultReminderDate(for deadline: Date) {
@@ -255,6 +286,7 @@ struct PolicySections: View {
     @Binding var drafts: [PolicyDraft]
     var showsApplies = false
     var purchaseDate: Date? = nil
+    var hasExistingReminder = false
 
     var body: some View {
         ForEach(SavedPolicy.Kind.allCases, id: \.self) { kind in
@@ -264,6 +296,7 @@ struct PolicySections: View {
                         draft: $drafts[index],
                         showsApplies: showsApplies,
                         purchaseDate: purchaseDate,
+                        hasExistingReminder: hasExistingReminder,
                         onRemove: { removeDraft(at: index) }
                     )
                 }
@@ -313,6 +346,7 @@ private struct PolicyRow: View {
     @Binding var draft: PolicyDraft
     let showsApplies: Bool
     let purchaseDate: Date?
+    let hasExistingReminder: Bool
     let onRemove: () -> Void
 
     var body: some View {
@@ -320,6 +354,7 @@ private struct PolicyRow: View {
             draft: $draft,
             showsApplies: showsApplies,
             purchaseDate: purchaseDate,
+            hasExistingReminder: hasExistingReminder,
             onRemove: onRemove
         )
     }
@@ -340,12 +375,13 @@ struct RetailerEditForm: View {
     @Binding var name: String
     @Binding var policies: [PolicyDraft]
     var purchaseDate: Date? = nil
+    var hasExistingReminder = false
 
     var body: some View {
         Section("Retailer") {
             TextField("Retailer name", text: $name).textInputAutocapitalization(.words)
         }
         Section { PolicyLiabilityNotice() }
-        PolicySections(drafts: $policies, purchaseDate: purchaseDate)
+        PolicySections(drafts: $policies, purchaseDate: purchaseDate, hasExistingReminder: hasExistingReminder)
     }
 }
