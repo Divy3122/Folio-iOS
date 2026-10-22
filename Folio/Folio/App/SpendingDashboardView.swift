@@ -73,9 +73,9 @@ enum SpendingChartPage: String, CaseIterable, Identifiable {
 @Observable
 final class SpendingDashboardViewModel {
 
-    private let container: DependencyContainer
+    let container: DependencyContainer
+    private(set) var services: ReceiptLibraryServices?
 
-    // Keep complete records so the dashboard can access metadata.category.
     private(set) var records: [ReceiptRecord] = []
 
     var isLoading = false
@@ -87,9 +87,6 @@ final class SpendingDashboardViewModel {
 
     let periods = ["Week", "Month", "Year"]
 
-    // Supported display currencies and their fixed example exchange rates.
-    // Each rate represents approximately how many AUD one unit of that
-    // currency is worth. These rates do not update automatically.
     let supportedCurrencies = [
         "AUD", "USD", "EUR", "GBP", "NZD",
         "CAD", "SGD", "JPY", "INR", "CNY"
@@ -122,13 +119,10 @@ final class SpendingDashboardViewModel {
         defer { isLoading = false }
 
         do {
-            let services = try ReceiptLibraryServices(
-                container: container
-            )
+            let libraryServices = try ReceiptLibraryServices(container: container)
+            self.services = libraryServices
 
-            records = try await services.searchReceipts(
-                ReceiptFilter.all
-            )
+            records = try await libraryServices.searchReceipts(ReceiptFilter.all)
 
             if !availableCategories.contains(selectedCategory) {
                 selectedCategory = "All"
@@ -164,8 +158,6 @@ final class SpendingDashboardViewModel {
         }
     }
 
-    /// Uses the category saved on the receipt record.
-    /// No item-name keyword classification is performed.
     func categoryName(for record: ReceiptRecord) -> String {
         let category = record.metadata.category
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -175,10 +167,6 @@ final class SpendingDashboardViewModel {
 
     // MARK: Currency Conversion
 
-    /// Converts an amount from its receipt currency to the selected
-    /// display currency. Returns nil when the source currency is
-    /// unsupported, avoiding displaying an unconverted amount under
-    /// the wrong currency symbol.
     private func convert(
         _ amount: Decimal,
         from sourceCurrency: String
@@ -209,8 +197,6 @@ final class SpendingDashboardViewModel {
         }
     }
 
-    /// Records with source currencies that cannot be converted are
-    /// excluded from converted totals and charts.
     private var convertibleRecords: [ReceiptRecord] {
         records.filter {
             convertedTotal(for: $0) != nil
@@ -312,9 +298,7 @@ final class SpendingDashboardViewModel {
             return nil
         }
 
-        return (
-            (totalSpending - previousTotal) / previousTotal
-        ) * Decimal(100)
+        return ((totalSpending - previousTotal) / previousTotal) * Decimal(100)
     }
 
     func money(_ amount: Decimal) -> String {
@@ -323,8 +307,6 @@ final class SpendingDashboardViewModel {
 
     // MARK: Category Breakdown
 
-    /// Each receipt's full total is assigned to its saved category.
-    /// This avoids guessing categories from individual item names.
     var categoryBreakdown: [SpendingCategory] {
         var totals: [String: Decimal] = [:]
 
@@ -396,10 +378,10 @@ final class SpendingDashboardViewModel {
         let monthStarts = (0..<6).compactMap { offset in
             calendar.date(
                 byAdding: .month,
-                value: -(5 - offset),
+                value: -offset,
                 to: startOfThisMonth
             )
-        }
+        }.reversed()
 
         return monthStarts.map { monthStart in
             let nextMonth = calendar.date(
@@ -427,6 +409,7 @@ struct SpendingDashboardView: View {
 
     @State private var model: SpendingDashboardViewModel
     @State private var selectedChart: SpendingChartPage = .categories
+    @State private var showingAgenticSearch = false
 
     init(container: DependencyContainer) {
         _model = State(
@@ -436,9 +419,37 @@ struct SpendingDashboardView: View {
         )
     }
 
+    // Dynamic Overview Card Background strictly switching between allowed tokens
+    private var overviewCardBackground: Color {
+        guard let change = model.spendingChange else {
+            return Color.CardBackground
+        }
+        if change > 0 {
+            return Color.ErrorRed.opacity(0.15)
+        } else if change < 0 {
+            return Color.SuccessGreen.opacity(0.15)
+        } else {
+            return Color.WarningAmber.opacity(0.15)
+        }
+    }
+
+    // Status Subtext Color strictly using allowed tokens
+    private var overviewStatusColor: Color {
+        guard let change = model.spendingChange else {
+            return .secondary
+        }
+        if change > 0 {
+            return Color.ErrorRed
+        } else if change < 0 {
+            return Color.SuccessGreen
+        } else {
+            return Color.WarningAmber
+        }
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 20) {
                 categorySelector
                 periodSelector
                 currencySelector
@@ -451,7 +462,7 @@ struct SpendingDashboardView: View {
                 if let error = model.errorMessage {
                     Text(error)
                         .font(.subheadline)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Color.ErrorRed)
                 }
 
                 if !model.unsupportedCurrencies.isEmpty {
@@ -466,12 +477,29 @@ struct SpendingDashboardView: View {
                 summarySection
                 chartsSection
             }
-            .padding()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle("Spending")
         .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showingAgenticSearch = true
+                } label: {
+                    Image(systemName: "sparkles")
+                        .font(.title3.weight(.semibold))
+                }
+            }
+        }
         .task {
             await model.load()
+        }
+        .sheet(isPresented: $showingAgenticSearch) {
+            if let services = model.services {
+                AgenticSearchSheetView(services: services)
+            }
         }
     }
 
@@ -484,9 +512,7 @@ struct SpendingDashboardView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
-                    ForEach(model.availableCategories, id: \.self) {
-                        category in
-
+                    ForEach(model.availableCategories, id: \.self) { category in
                         Button {
                             model.selectedCategory = category
                         } label: {
@@ -499,7 +525,7 @@ struct SpendingDashboardView: View {
                                         .fill(
                                             model.selectedCategory == category
                                                 ? Color.accentColor
-                                                : Color(.secondarySystemBackground)
+                                                : Color.CardBackground
                                         )
                                 }
                                 .foregroundStyle(
@@ -536,9 +562,7 @@ struct SpendingDashboardView: View {
                 Spacer()
 
                 Menu {
-                    ForEach(model.availableCurrencies, id: \.self) {
-                        currency in
-
+                    ForEach(model.availableCurrencies, id: \.self) { currency in
                         Button {
                             model.selectedCurrency = currency
                         } label: {
@@ -592,12 +616,8 @@ struct SpendingDashboardView: View {
                             ? "arrow.up.right"
                             : "arrow.down.right"
                     )
-                    .font(.caption)
-                    .foregroundStyle(
-                        change > 0 ? Color.red :
-                        change < 0 ? Color.green :
-                        Color.secondary
-                    )
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(overviewStatusColor)
                 } else {
                     Text("No previous-period spending to compare")
                         .font(.caption)
@@ -607,7 +627,7 @@ struct SpendingDashboardView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding()
             .background(
-                Color(.secondarySystemBackground),
+                overviewCardBackground,
                 in: RoundedRectangle(cornerRadius: 18)
             )
 
@@ -648,7 +668,7 @@ struct SpendingDashboardView: View {
         .frame(maxWidth: .infinity, minHeight: 95, alignment: .leading)
         .padding()
         .background(
-            Color(.secondarySystemBackground),
+            Color.CardBackground,
             in: RoundedRectangle(cornerRadius: 16)
         )
     }
@@ -770,8 +790,7 @@ struct SpendingDashboardView: View {
                     .cornerRadius(4)
                 }
                 .chartXAxis {
-                    AxisMarks(values: .automatic(desiredCount: 5)) {
-                        AxisValue in
+                    AxisMarks(values: .automatic(desiredCount: 5)) { AxisValue in
                         AxisValueLabel(
                             format: .dateTime.day().month(.abbreviated)
                         )
@@ -800,8 +819,7 @@ struct SpendingDashboardView: View {
                     .cornerRadius(5)
                 }
                 .chartXAxis {
-                    AxisMarks(values: .stride(by: .month)) {
-                        AxisValue in
+                    AxisMarks(values: .stride(by: .month)) { AxisValue in
                         AxisValueLabel(
                             format: .dateTime.month(.abbreviated)
                         )
@@ -832,7 +850,7 @@ struct SpendingDashboardView: View {
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
-            Color(.secondarySystemBackground),
+            Color.CardBackground,
             in: RoundedRectangle(cornerRadius: 18)
         )
     }
