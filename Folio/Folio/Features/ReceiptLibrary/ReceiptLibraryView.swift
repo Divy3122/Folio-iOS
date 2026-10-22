@@ -3,20 +3,22 @@ import SwiftUI
 struct ReceiptLibraryView: View {
     @State private var model: ReceiptLibraryViewModel
     private let services: ReceiptLibraryServices
+    private let container: DependencyContainer?
 
     @State private var isSelecting = false
     @State private var selectedIDs: Set<UUID> = []
     @State private var showDeleteConfirmation = false
     @State private var isDeleting = false
-    @State private var showAgentSearch = false
+    @State private var showReminders = false
 
     private let columns = [
         GridItem(.flexible(), spacing: 12),
         GridItem(.flexible(), spacing: 12)
     ]
 
-    init(services: ReceiptLibraryServices) {
+    init(services: ReceiptLibraryServices, container: DependencyContainer? = nil) {
         self.services = services
+        self.container = container
         _model = State(initialValue: ReceiptLibraryViewModel(services: services))
     }
 
@@ -29,8 +31,18 @@ struct ReceiptLibraryView: View {
                 .navigationDestination(for: ReceiptRecord.self) { record in
                     ReceiptDetailView(record: record, services: services)
                 }
-                .sheet(isPresented: $showAgentSearch) {
-                    AgenticSearchSheetView(services: services)
+                .sheet(isPresented: $showReminders) {
+                    if let container {
+                        NavigationStack {
+                            ReturnRemindersView(viewModel: ReturnRemindersViewModel(
+                                loadReminderSummaries: container.loadReminderSummaries,
+                                deleteReturnReminder: container.deleteReturnReminder
+                            ))
+                            .navigationDestination(for: ReminderReceiptLink.self) { link in
+                                ReceiptDetailLoader(receiptID: link.receiptID, services: services)
+                            }
+                        }
+                    }
                 }
                 .confirmationDialog(
                     "Delete \(selectedIDs.count) \(selectedIDs.count == 1 ? "receipt" : "receipts")?",
@@ -111,11 +123,11 @@ struct ReceiptLibraryView: View {
     @ToolbarContentBuilder private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             HStack(spacing: 12) {
-                // Apple Intelligence Agentic Search Button
+                // Reminders / Notifications Button
                 Button {
-                    showAgentSearch = true
+                    showReminders = true
                 } label: {
-                    Label("AI Assistant", systemImage: "sparkles")
+                    Label("Reminders", systemImage: "bell")
                         .font(.headline)
                         .foregroundStyle(Color.accentColor)
                 }
@@ -223,6 +235,8 @@ struct ReceiptLibraryView: View {
     }
 }
 
+// MARK: - Button Style
+
 private struct CubeButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -232,8 +246,16 @@ private struct CubeButtonStyle: ButtonStyle {
     }
 }
 
+// MARK: - Required Protocol Conformance Extensions
+
 extension ReceiptRecord: Hashable {
-    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    static func == (lhs: ReceiptRecord, rhs: ReceiptRecord) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
 }
 
 extension ReceiptFilter.Sort {

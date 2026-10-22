@@ -35,7 +35,7 @@ struct ContentView: View {
     var body: some View {
         Group {
             if let message = model.errorMessage {
-            ContentUnavailableView {
+                ContentUnavailableView {
                     Label(
                         "Local storage unavailable",
                         systemImage: "externaldrive.badge.exclamationmark"
@@ -48,45 +48,28 @@ struct ContentView: View {
             } else if model.dependencies != nil {
                 TabView {
                     NavigationStack {
-                        Text("Dashboard integration pending")
-                            .navigationTitle("Home")
+                        if let dependencies = model.dependencies {
+                            SpendingDashboardView(container: dependencies)
+                        }
                     }
                     .tabItem {
                         Label("Home", systemImage: "house")
                     }
 
                     NavigationStack {
-                        if let library = model.library {
-                            ReceiptLibraryView(services: library)
+                        if let library = model.library, let dependencies = model.dependencies {
+                            ReceiptLibraryView(services: library, container: dependencies)
                         }
                     }
                     .tabItem {
                         Label("Receipts", systemImage: "receipt")
                     }
 
-                    NavigationStack {
+                        NavigationStack {
                         ReceiptScannerView()
                     }
                     .tabItem {
                         Label("Scan", systemImage: "camera")
-                    }
-
-                    NavigationStack {
-                        if let dependencies = model.dependencies {
-                            ReturnRemindersView(viewModel: ReturnRemindersViewModel(
-                                loadReminderSummaries: dependencies.loadReminderSummaries,
-                                deleteReturnReminder: dependencies.deleteReturnReminder
-                            ))
-                            // When a reminder is tapped, open that receipt's detail screen
-                            .navigationDestination(for: ReminderReceiptLink.self) { link in
-                                if let library = model.library {
-                                    ReceiptDetailLoader(receiptID: link.receiptID, services: library)
-                                }
-                            }
-                        }
-                    }
-                    .tabItem {
-                        Label("Reminders", systemImage: "bell")
                     }
                 }
                 .tint(.BrandTeal)

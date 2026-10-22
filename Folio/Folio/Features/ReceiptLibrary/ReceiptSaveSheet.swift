@@ -426,7 +426,9 @@ struct ReceiptSaveSheet: View {
             }
             
             if model.selectedRetailerID == nil {
-                Section { Toggle("Remember this retailer and its policies", isOn: .constant(model.phase == .saved))}
+                Section {
+                    Toggle("Remember this retailer and its policies", isOn: $model.rememberRetailer)
+                }
             }
 
             if let name = model.selectedRetailerName {

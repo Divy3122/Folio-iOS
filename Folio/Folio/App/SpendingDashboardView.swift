@@ -48,8 +48,9 @@ struct DailySpending: Identifiable {
 @Observable
 final class SpendingDashboardViewModel {
     private let fetchReceipts: FetchReceipts
+    private let repository: (any ReceiptLibraryRepository)?
 
-    private(set) var receipts: [PurchaseReceipt] = []
+    private(set) var records: [ReceiptRecord] = []
     private(set) var isLoading = false
     private(set) var errorMessage: String?
 
@@ -61,7 +62,8 @@ final class SpendingDashboardViewModel {
     private let now = Date()
 
     init(container: DependencyContainer) {
-        fetchReceipts = container.fetchReceipts
+        self.fetchReceipts = container.fetchReceipts
+        self.repository = container.receipts as? any ReceiptLibraryRepository
     }
 
     func load() async {
@@ -71,7 +73,13 @@ final class SpendingDashboardViewModel {
         errorMessage = nil
 
         do {
-            receipts = try await fetchReceipts()
+            if let repository {
+                records = try await repository.search(ReceiptFilter())
+            } else {
+                let receipts = try await fetchReceipts()
+                records = receipts.map { ReceiptRecord(receipt: $0) }
+            }
+
             if !availableCurrencies.contains(selectedCurrency),
                let firstCurrency = availableCurrencies.first {
                 selectedCurrency = firstCurrency
@@ -84,27 +92,23 @@ final class SpendingDashboardViewModel {
     }
 
     var availableCurrencies: [String] {
-        Array(Set(profileReceipts.map(\.currencyCode))).sorted()
+        Array(Set(profileRecords.map { $0.receipt.currencyCode })).sorted()
     }
 
-    private var profileReceipts: [PurchaseReceipt] {
-        receipts.filter { $0.profile == selectedProfile }
+    private var profileRecords: [ReceiptRecord] {
+        records.filter { $0.receipt.profile == selectedProfile }
     }
 
     private var currentRange: (start: Date, end: Date) {
         let component: Calendar.Component
-        let amount: Int
 
         switch selectedPeriod {
         case "Week":
             component = .weekOfYear
-            amount = 1
         case "Year":
             component = .year
-            amount = 1
         default:
             component = .month
-            amount = 1
         }
 
         let start = calendar.dateInterval(
@@ -114,76 +118,63 @@ final class SpendingDashboardViewModel {
 
         let end = calendar.date(
             byAdding: component,
-            value: amount,
+            value: 1,
             to: start
         ) ?? now
 
         return (start, end)
     }
 
-    private var currentReceipts: [PurchaseReceipt] {
-        profileReceipts.filter {
-            $0.currencyCode == selectedCurrency &&
-            $0.purchasedAt >= currentRange.start &&
-            $0.purchasedAt < currentRange.end
+    private var currentRecords: [ReceiptRecord] {
+        profileRecords.filter {
+            $0.receipt.currencyCode == selectedCurrency &&
+            $0.receipt.purchasedAt >= currentRange.start &&
+            $0.receipt.purchasedAt < currentRange.end
         }
     }
 
-    private var previousReceipts: [PurchaseReceipt] {
-        let duration = currentRange.end.timeIntervalSince(
-            currentRange.start
-        )
-
+    private var previousRecords: [ReceiptRecord] {
+        let duration = currentRange.end.timeIntervalSince(currentRange.start)
         let previousStart = currentRange.start.addingTimeInterval(-duration)
 
-        return profileReceipts.filter {
-            $0.currencyCode == selectedCurrency &&
-            $0.purchasedAt >= previousStart &&
-            $0.purchasedAt < currentRange.start
+        return profileRecords.filter {
+            $0.receipt.currencyCode == selectedCurrency &&
+            $0.receipt.purchasedAt >= previousStart &&
+            $0.receipt.purchasedAt < currentRange.start
         }
     }
 
     var totalSpending: Decimal {
-        currentReceipts.reduce(Decimal.zero) {
-            $0 + $1.total
-        }
+        currentRecords.reduce(Decimal.zero) { $0 + $1.receipt.total }
     }
 
     var previousTotal: Decimal {
-        previousReceipts.reduce(Decimal.zero) {
-            $0 + $1.total
-        }
+        previousRecords.reduce(Decimal.zero) { $0 + $1.receipt.total }
     }
 
     var transactionCount: Int {
-        currentReceipts.count
+        currentRecords.count
     }
 
     var averageTransaction: Decimal {
-        guard !currentReceipts.isEmpty else { return 0 }
-
-        return totalSpending / Decimal(currentReceipts.count)
+        guard !currentRecords.isEmpty else { return 0 }
+        return totalSpending / Decimal(currentRecords.count)
     }
 
     var spendingChange: Decimal? {
         guard previousTotal != 0 else { return nil }
-
         return ((totalSpending - previousTotal) / previousTotal) * 100
     }
 
     var retailerBreakdown: [RetailerSpending] {
-        let grouped = Dictionary(grouping: currentReceipts) {
-            $0.retailer.name.trimmingCharacters(
-                in: .whitespacesAndNewlines
-            )
+        let grouped = Dictionary(grouping: currentRecords) {
+            $0.receipt.retailer.name.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
         return grouped.map { name, values in
             RetailerSpending(
                 name: name.isEmpty ? "Unknown retailer" : name,
-                amount: values.reduce(Decimal.zero) {
-                    $0 + $1.total
-                },
+                amount: values.reduce(Decimal.zero) { $0 + $1.receipt.total },
                 transactionCount: values.count
             )
         }
@@ -193,31 +184,10 @@ final class SpendingDashboardViewModel {
     var categoryBreakdown: [SpendingCategory] {
         var totals: [String: Decimal] = [:]
 
-        for receipt in currentReceipts {
-            let itemSubtotal = receipt.items.reduce(Decimal.zero) {
-                $0 + ($1.unitPrice * Decimal($1.quantity))
-            }
-
-            guard !receipt.items.isEmpty, itemSubtotal > 0 else {
-                totals["Other", default: 0] += receipt.total
-                continue
-            }
-
-            var categorySubtotals: [String: Decimal] = [:]
-
-            for item in receipt.items {
-                let category = categoryFor(item.name)
-                let subtotal = item.unitPrice * Decimal(item.quantity)
-
-                categorySubtotals[category, default: 0] += subtotal
-            }
-
-            // Allocate the authoritative receipt total proportionally
-            // across the estimated item categories.
-            for (category, subtotal) in categorySubtotals {
-                let allocatedTotal = receipt.total * subtotal / itemSubtotal
-                totals[category, default: 0] += allocatedTotal
-            }
+        for record in currentRecords {
+            let categoryName = record.metadata.category.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = categoryName.isEmpty ? "Uncategorized" : categoryName
+            totals[key, default: 0] += record.receipt.total
         }
 
         return totals.map { name, amount in
@@ -227,78 +197,37 @@ final class SpendingDashboardViewModel {
     }
 
     var dailyBreakdown: [DailySpending] {
-        let grouped = Dictionary(grouping: currentReceipts) {
-            calendar.startOfDay(for: $0.purchasedAt)
+        let grouped = Dictionary(grouping: currentRecords) {
+            calendar.startOfDay(for: $0.receipt.purchasedAt)
         }
 
         return grouped.map { date, values in
             DailySpending(
                 date: date,
-                amount: values.reduce(Decimal.zero) {
-                    $0 + $1.total
-                }
+                amount: values.reduce(Decimal.zero) { $0 + $1.receipt.total }
             )
         }
         .sorted { $0.date < $1.date }
     }
 
-    private func categoryFor(_ itemName: String) -> String {
-        let name = itemName.lowercased()
-
-        let rules: [(String, [String])] = [
-            ("Groceries", [
-                "milk", "bread", "egg", "fruit", "vegetable",
-                "meat", "grocery", "cheese", "food"
-            ]),
-            ("Electronics", [
-                "phone", "laptop", "computer", "charger",
-                "headphone", "tablet", "keyboard"
-            ]),
-            ("Clothing", [
-                "shirt", "pants", "jeans", "shoe", "jacket",
-                "dress", "clothing"
-            ]),
-            ("Home", [
-                "furniture", "lamp", "towel", "bedding",
-                "kitchen", "cleaning", "detergent"
-            ]),
-            ("Health & Beauty", [
-                "shampoo", "soap", "skincare", "cosmetic",
-                "vitamin", "toothpaste", "medicine"
-            ])
-        ]
-
-        for (category, keywords) in rules {
-            if keywords.contains(where: { name.contains($0) }) {
-                return category
-            }
-        }
-
-        return "Other"
-    }
-
     func money(_ amount: Decimal) -> String {
-        amount.formatted(
-            .currency(code: selectedCurrency)
-        )
+        amount.formatted(.currency(code: selectedCurrency))
     }
 
     var currencySymbol: String {
         Locale(identifier: "en_AU")
-            .localizedString(forCurrencyCode: selectedCurrency)
-            ?? selectedCurrency
+            .localizedString(forCurrencyCode: selectedCurrency) ?? selectedCurrency
     }
 }
 
 struct SpendingDashboardView: View {
     @State private var model: SpendingDashboardViewModel
+    @State private var showAgentSearch = false
+    private let container: DependencyContainer
 
     init(container: DependencyContainer) {
-        _model = State(
-            initialValue: SpendingDashboardViewModel(
-                container: container
-            )
-        )
+        self.container = container
+        _model = State(initialValue: SpendingDashboardViewModel(container: container))
     }
 
     var body: some View {
@@ -313,16 +242,11 @@ struct SpendingDashboardView: View {
                         .frame(maxWidth: .infinity)
                 } else if let message = model.errorMessage {
                     ContentUnavailableView {
-                        Label(
-                            "Unable to load spending",
-                            systemImage: "exclamationmark.triangle"
-                        )
+                        Label("Unable to load spending", systemImage: "exclamationmark.triangle")
                     } description: {
                         Text(message)
                     } actions: {
-                        Button("Try Again") {
-                            Task { await model.load() }
-                        }
+                        Button("Try Again") { Task { await model.load() } }
                     }
                 } else {
                     summarySection
@@ -334,15 +258,24 @@ struct SpendingDashboardView: View {
             .padding()
         }
         .navigationTitle("Spending")
-        .task {
-            await model.load()
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showAgentSearch = true
+                } label: {
+                    Label("AI Assistant", systemImage: "sparkles")
+                        .font(.headline)
+                        .foregroundStyle(Color.BrandTeal)
+                }
+            }
         }
-        .onChange(of: model.selectedProfile) {
-            refreshCurrencyIfNeeded()
+        .sheet(isPresented: $showAgentSearch) {
+            if let services = (try? ReceiptLibraryServices(container: container)) ?? ReceiptSavingContext.current?.services {
+                AgenticSearchSheetView(services: services)
+            }
         }
-        .onChange(of: model.selectedPeriod) {
-            // All period-dependent values are computed from this selection.
-        }
+        .task { await model.load() }
+        .onChange(of: model.selectedProfile) { refreshCurrencyIfNeeded() }
     }
 
     private var profilePicker: some View {
@@ -461,7 +394,7 @@ struct SpendingDashboardView: View {
             Text("Spending by category")
                 .font(.title3.bold())
 
-            Text("Estimated from receipt item names and subtotals.")
+            Text("Based on saved receipt categories.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
