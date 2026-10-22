@@ -20,17 +20,27 @@ struct ContentView: View {
             Group {
                 if let message = model.errorMessage {
                     ContentUnavailableView {
-                        Label("Local storage unavailable", systemImage: "externaldrive.badge.exclamationmark")
-                    } description: { Text(message) } actions: {
+                        Label(
+                            "Local storage unavailable",
+                            systemImage: "externaldrive.badge.exclamationmark"
+                        )
+                    } description: {
+                        Text(message)
+                    } actions: {
                         Button("Try again", action: model.load)
                     }
+                } else if let dependencies = model.dependencies {
+                    SpendingDashboardView(container: dependencies)
                 } else {
-                    ContentUnavailableView("Welcome to Folio", systemImage: "receipt",
-                        description: Text("Your private receipt library. Feature modules are being prepared."))
+                    ProgressView("Preparing Folio...")
                 }
             }
             .navigationTitle("Folio")
         }
         .task { model.load() }
     }
+}
+
+#Preview {
+    ContentView()
 }
