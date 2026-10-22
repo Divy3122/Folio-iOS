@@ -78,6 +78,11 @@ extension ReturnReminderStatus {
     }
 }
 
+/// Tapping a reminder asks to open this receipt. ContentView decides which screen shows it.
+struct ReminderReceiptLink: Hashable {
+    let receiptID: UUID
+}
+
 /// The return reminders screen. Shows a spinner, an empty message, an error, or the list.
 struct ReturnRemindersView: View {
     @State var viewModel: ReturnRemindersViewModel
@@ -108,7 +113,13 @@ struct ReturnRemindersView: View {
                 
             case .loaded(let summaries):
                 List(summaries) { summary in
-                    ReminderRowView(summary: summary)
+                    ZStack {
+                        // Invisible link covering the card, so tapping opens the receipt
+                        // (hidden so the list doesn't add a grey arrow next to the card)
+                        NavigationLink(value: ReminderReceiptLink(receiptID: summary.receiptID)) { EmptyView() }
+                            .opacity(0)
+                        ReminderRowView(summary: summary)
+                    }
                     // Hide the default row look so only the card shows
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -126,7 +137,8 @@ struct ReturnRemindersView: View {
             }
         }
         .navigationTitle("Returns")
-        .task { await viewModel.load() }   // load when the screen first appears
+        // Reload every time the screen appears, including when coming back from a receipt
+        .onAppear { Task { await viewModel.load() } }
     }
 }
 
