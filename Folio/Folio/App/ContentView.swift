@@ -97,3 +97,7 @@ struct ContentView: View {
         .task { model.load() }
     }
 }
+
+#Preview {
+    ContentView()
+}
