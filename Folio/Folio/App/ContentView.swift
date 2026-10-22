@@ -74,15 +74,15 @@ struct ContentView: View {
                     NavigationStack {
                         if let dependencies = model.dependencies {
                             ReturnRemindersView(viewModel: ReturnRemindersViewModel(
-                                loadReminderSummaries: LoadReminderSummaries(
-                                    reminders: dependencies.reminders,
-                                    receipts: dependencies.receipts
-                                ),
-                                deleteReturnReminder: DeleteReturnReminder(
-                                    reminders: dependencies.reminders,
-                                    scheduler: NotificationReminderScheduler()
-                                )
+                                loadReminderSummaries: dependencies.loadReminderSummaries,
+                                deleteReturnReminder: dependencies.deleteReturnReminder
                             ))
+                            // When a reminder is tapped, open that receipt's detail screen
+                            .navigationDestination(for: ReminderReceiptLink.self) { link in
+                                if let library = model.library {
+                                    ReceiptDetailLoader(receiptID: link.receiptID, services: library)
+                                }
+                            }
                         }
                     }
                     .tabItem {
