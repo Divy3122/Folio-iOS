@@ -424,6 +424,10 @@ struct ReceiptSaveSheet: View {
                     ForEach(PurchaseProfile.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
                 }
             }
+            
+            if model.selectedRetailerID == nil {
+                Section { Toggle("Remember this retailer and its policies", isOn: .constant(model.phase == .saved))}
+            }
 
             if let name = model.selectedRetailerName {
                 Section {
@@ -435,10 +439,6 @@ struct ReceiptSaveSheet: View {
             Section { PolicyLiabilityNotice() }
 
             PolicySections(drafts: $model.policyDrafts, showsApplies: true, purchaseDate: model.date)
-
-            if model.selectedRetailerID == nil {
-                Section { Toggle("Remember this retailer and its policies", isOn: $model.rememberRetailer) }
-            }
 
             Section("Amount") {
                 Picker("Currency", selection: $model.currency) {

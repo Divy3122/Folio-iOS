@@ -133,7 +133,6 @@ struct ReturnRemindersView: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
-                .background(Color.AppBackground)
             }
         }
         .navigationTitle("Returns")
