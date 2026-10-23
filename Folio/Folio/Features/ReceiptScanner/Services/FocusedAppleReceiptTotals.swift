@@ -70,7 +70,7 @@ enum FocusedAppleReceiptTotals {
         let response = try await session.respond(
             to: "Classify the printed receipt amounts using semantic meaning, not fixed label keywords:\n\(input)",
             generating: GeneratedReceiptSemanticAmounts.self,
-            options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: 850)
+            options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 850)
         )
         return response.content.amounts.map { entry in
             let role: ReceiptSemanticAmountProposal.Role

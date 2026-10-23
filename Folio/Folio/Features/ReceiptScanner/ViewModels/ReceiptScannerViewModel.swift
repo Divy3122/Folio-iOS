@@ -294,6 +294,11 @@ final class ReceiptScannerViewModel {
                 draft = ReceiptReviewDraft()
             }
             ReceiptSimpleTotals.simplify(&draft, ocrText: extractedText)
+            let audit = ReceiptScanQualityAudit.inspect(
+                text: extractedText, pages: ocrEvidencePages, expectedPageCount: pageCount
+            )
+            extractionWarnings.append(contentsOf: audit.warnings)
+            ReceiptScanQualityAudit.protect(&draft, audit: audit)
             apply(draft)
             #if DEBUG
             let simpleAmounts = ReceiptSimpleTotals.read(ocrText: extractedText)
@@ -306,7 +311,16 @@ final class ReceiptScannerViewModel {
             pipelineDebugReport += "\nEXTRACTION CANCELLED"
             #endif
         } catch {
-            extractionWarnings.append("Structured extraction failed. Enter costs manually using the retained OCR and images.")
+            guard !Task.isCancelled else { return }
+            extractionWarnings.append("Structured product extraction failed. Check products against the retained images.")
+            var fallback = ReceiptReviewDraft()
+            ReceiptSimpleTotals.simplify(&fallback, ocrText: extractedText)
+            let audit = ReceiptScanQualityAudit.inspect(
+                text: extractedText, pages: ocrEvidencePages, expectedPageCount: pageCount
+            )
+            extractionWarnings.append(contentsOf: audit.warnings)
+            ReceiptScanQualityAudit.protect(&fallback, audit: audit)
+            if editRevision == revision { apply(fallback) }
             #if DEBUG
             pipelineDebugReport += "\nEXTRACTION THREW ERROR | \(error.localizedDescription)"
             #endif

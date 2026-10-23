@@ -93,7 +93,7 @@ actor FoundationModelsReceiptExtractor: ReceiptEvidenceExtracting {
                 """,
             generating: GeneratedReceiptCosts.self,
             options: GenerationOptions(
-                samplingMode: .greedy,
+                sampling: .greedy,
                 maximumResponseTokens: 1800
             )
         )

@@ -181,6 +181,6 @@ actor ReceiptCompanyIdentifier: ReceiptCompanyIdentifying {
             invent domains, business identifiers, addresses or companies. No evidence means no candidates.
             """)
         return try await session.respond(to: input, generating: ReceiptCompanyResponse.self,
-                                         options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: 1100)).content.candidates
+                                         options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 1100)).content.candidates
     }
 }
