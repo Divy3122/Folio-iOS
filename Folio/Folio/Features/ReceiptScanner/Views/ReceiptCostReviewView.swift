@@ -34,6 +34,17 @@ struct ReceiptCostReviewView: View {
                         .foregroundStyle(.red)
                 }
 
+                let accuracyNotes = Array(Set(viewModel.extractionWarnings)).sorted()
+                if !accuracyNotes.isEmpty {
+                    DisclosureGroup("Scan accuracy checks (\(accuracyNotes.count))") {
+                        ForEach(accuracyNotes, id: \.self) { note in
+                            Label(note, systemImage: "exclamationmark.triangle")
+                                .font(.footnote)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+
                 // Missing product names or printed totals are still actionable.
                 // We do not show the extractor's tax/discount/fee guesses as warnings.
                 if !viewModel.warnings.isEmpty {
@@ -66,27 +77,29 @@ struct ReceiptCostReviewView: View {
                 }
 
                 #if DEBUG
-                DisclosureGroup("Debug pipeline report (test builds only)") {
-                    if !viewModel.extractionWarnings.isEmpty {
-                        DisclosureGroup("Extraction diagnostics (\(Set(viewModel.extractionWarnings).count))") {
-                            ForEach(Array(Set(viewModel.extractionWarnings)).sorted(), id: \.self) { warning in
-                                Text(warning)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                if ProcessInfo.processInfo.arguments.contains("-FolioScannerDiagnostics") {
+                    DisclosureGroup("Debug pipeline report (test builds only)") {
+                        if !viewModel.extractionWarnings.isEmpty {
+                            DisclosureGroup("Extraction diagnostics (\(Set(viewModel.extractionWarnings).count))") {
+                                ForEach(Array(Set(viewModel.extractionWarnings)).sorted(), id: \.self) { warning in
+                                    Text(warning)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
-                    }
 
-                    let report = viewModel.pipelineDebugReport
-                    Text(report)
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                    ShareLink(item: report) {
-                        Label("Share diagnostics", systemImage: "square.and.arrow.up")
+                        let report = viewModel.pipelineDebugReport
+                        Text(report)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                        ShareLink(item: report) {
+                            Label("Share diagnostics", systemImage: "square.and.arrow.up")
+                        }
+                        Text("Diagnostics may include receipt contents. Redact personal information before sharing.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
-                    Text("Diagnostics may include receipt contents. Redact personal information before sharing.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
                 }
                 #endif
 
