@@ -4,6 +4,10 @@ import Testing
 @testable import Folio
 
 @MainActor private final class ReceiptMock: ReceiptRepository {
+    func update(_ receipt: Folio.PurchaseReceipt) async throws {
+    
+    }
+    
     var values: [PurchaseReceipt] = []
     var fail = false
     func save(_ receipt: PurchaseReceipt) async throws {
@@ -23,6 +27,7 @@ import Testing
         values.append(reminder)
     }
     func fetchAll() async throws -> [ReturnReminder] { values }
+    func delete(id: UUID) async throws { values.removeAll { $0.id == id } }
 }
 
 @MainActor struct FolioTests {

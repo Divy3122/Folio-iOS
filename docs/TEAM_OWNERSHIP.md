@@ -5,7 +5,7 @@
 | Receipt Scanner & AI | Divy3122 | feature/receipt-scanner |
 | Return Reminders | BrandonH-12 | feature/return-reminders |
 | Receipt Storage | zoinks-05 | feature/receipt-storage |
-| Spending Dashboard | Unassigned | feature/spending-dashboard |
+| Spending Dashboard | athande23 | feature/spending-dashboard |
 | Architecture & Integration | Unassigned | feature/app-integration |
 
 ## Git Workflow

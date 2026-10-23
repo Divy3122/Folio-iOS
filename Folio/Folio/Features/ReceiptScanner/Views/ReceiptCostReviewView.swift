@@ -9,12 +9,6 @@ struct ReceiptCostReviewView: View {
 
     var body: some View {
         Form {
-            // Manually supplied details — no automatic company identification.
-            ReceiptManualDetailsView(
-                retailerName: $viewModel.review.manualRetailerName,
-                receiptDate: $viewModel.review.manualReceiptDate
-            )
-
             // Exactly the two requested financial sections. Additional fees are
             // calculated in this component as final total minus subtotal.
             ReceiptSimpleBreakdownSections(

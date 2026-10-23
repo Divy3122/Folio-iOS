@@ -43,7 +43,7 @@ enum FocusedAppleReceiptProducts {
         let response = try await session.respond(
             to: "Recover only the unmatched purchased items and unresolved printed line costs in these numbered OCR lines:\n\(numberedOCR)",
             generating: FocusedGeneratedReceiptProducts.self,
-            options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 1200)
+            options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: 1200)
         )
         return response.content.products.map {
             FocusedReceiptProductProposal(
