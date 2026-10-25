@@ -4,7 +4,6 @@
 //
 //  Created by Ziyan Nadeem on 21/10/2026.
 //
-
 import SwiftUI
 import FoundationModels
 
@@ -52,10 +51,10 @@ final class AgenticSearchViewModel {
     private var modelSession: LanguageModelSession?
 
     static let suggestedPrompts: [String] = [
-        "Do I have any active warranties or protection plans?",
+        "Do I have any active warranties?",
+        "Which items are within their return window?",
         "How am I doing this month vs last month?",
-        "What is my personal vs business spend?",
-        "How can I cut down on my spending?"
+        "What is my personal vs business spend?"
     ]
 
     init(services: ReceiptLibraryServices) {
@@ -70,23 +69,22 @@ final class AgenticSearchViewModel {
         if systemModel.availability == .available {
             let contextPrompt = buildReceiptsContextPrompt()
             let instructions = """
-            You are Folio's friendly, sharp, and budget-smart AI financial peer.
+            You are Folio's sharp, direct AI financial assistant.
             
             YOUR GOALS:
-            1. Answer questions naturally about purchase history, return policy deadlines, warranty coverage, and spending trends.
-            2. For warranties: check explicit logged policies, user notes, and item names (e.g., AppleCare, extended protection). For electronics/appliances without explicit dates, assume standard 12-month manufacturer coverage from purchase date.
-            3. Compare spending across periods (this month vs last month) and profiles (personal vs business).
-            4. Offer clear, practical savings tips based on actual expense totals.
+            1. Answer questions about warranty coverage strictly using the explicit warranty policies logged under the 'WARRANTIES LOGGED' section in the context.
+            2. Never mix up Return Windows with Warranties. They are completely separate.
+            3. NEVER assume standard 12-month or 1-year coverage. If a receipt has no explicit warranty policy or warranty note logged, explicitly tell the user that no warranty policy was logged for that purchase.
+            4. State retailer, item name, exact calculated warranty expiry date, and remaining days whenever discussing warranties.
             
             STRICT RULES:
-            - Keep answers concise, energetic, and direct (2-3 sentences max).
-            - Never repeat identical template phrases or loop answers across turns.
-            - ABSOLUTELY NO EMOJIS. Never include or append emojis anywhere in your output.
-            - NEVER display raw database IDs, UUIDs, or primary keys.
+            - Keep answers direct and concise (2-3 sentences max).
+            - ABSOLUTELY NO EMOJIS anywhere in your output.
+            - NEVER display raw database IDs, UUIDs, or internal keys.
             
             Current Date: \(Date.now.formatted(date: .long, time: .omitted))
             
-            Dashboard Metrics & Saved Receipts Context:
+            Saved Receipts & Policy Context:
             \(contextPrompt)
             """
             modelSession = LanguageModelSession(instructions: instructions)
@@ -120,7 +118,7 @@ final class AgenticSearchViewModel {
 
     private func generateResponse(for query: String) async -> (String, [ReceiptRecord], [String], DashboardInsight?) {
         if isInvalidQuery(query) {
-            let invalidMsg = "Hey there! I can help you analyze spending trends, check return deadlines, track warranties, or suggest ways to trim your monthly expenses. What would you like to explore?"
+            let invalidMsg = "How can I help? I can look up your exact logged warranty expiration dates, active return deadlines, or spending trends across your receipts."
             return (invalidMsg, [], Self.suggestedPrompts, nil)
         }
 
@@ -136,7 +134,7 @@ final class AgenticSearchViewModel {
                     return (cleanedContent, matchedRecords, followUps, insight)
                 }
             } catch {
-                // Fallback to conversational engine if model call fails
+                // Fallback to deterministic parser if model session call fails
             }
         }
 
@@ -151,7 +149,7 @@ final class AgenticSearchViewModel {
         return letters.isEmpty
     }
 
-    // MARK: - Context & Dashboard Calculations
+    // MARK: - Context Engine (Strict Logged Warranty Calculations)
 
     private func buildReceiptsContextPrompt() -> String {
         guard !allRecords.isEmpty else { return "No receipts saved." }
@@ -176,49 +174,59 @@ final class AgenticSearchViewModel {
         let personalTotal = allRecords.filter { $0.receipt.profile == .personal }.reduce(Decimal.zero) { $0 + $1.receipt.total }
         let businessTotal = allRecords.filter { $0.receipt.profile == .business }.reduce(Decimal.zero) { $0 + $1.receipt.total }
 
-        var categoryTotals: [String: Decimal] = [:]
-        for record in allRecords {
-            let cat = record.metadata.category.trimmingCharacters(in: .whitespacesAndNewlines)
-            let categoryKey = cat.isEmpty ? "Uncategorized" : cat
-            categoryTotals[categoryKey, default: 0] += record.receipt.total
-        }
-
         let primaryCurrency = allRecords.first?.receipt.currencyCode ?? "AUD"
         let overallTotal = allRecords.reduce(Decimal.zero) { $0 + $1.receipt.total }
-        let topCategories = categoryTotals.sorted { $0.value > $1.value }.prefix(3)
-            .map { "\($0.key): \($0.value.formatted(.currency(code: primaryCurrency)))" }.joined(separator: ", ")
-
-        let changeText = momChange != nil ? String(format: "%.1f%%", NSDecimalNumber(decimal: momChange!).doubleValue) : "N/A"
 
         let summaryHeader = """
         DASHBOARD METRICS:
         - Overall Lifetime Total: \(overallTotal.formatted(.currency(code: primaryCurrency))) across \(allRecords.count) receipts
         - Current Month Spending: \(currentTotal.formatted(.currency(code: primaryCurrency))) (\(currentMonthRecords.count) transactions)
         - Previous Month Spending: \(previousTotal.formatted(.currency(code: primaryCurrency)))
-        - Month-over-Month Change: \(changeText)
         - Profile Split -> Personal: \(personalTotal.formatted(.currency(code: primaryCurrency))) | Business: \(businessTotal.formatted(.currency(code: primaryCurrency)))
-        - Top Categories: \(topCategories)
         """
 
-        let receiptList = allRecords.prefix(15).map { record in
+        let receiptList = allRecords.prefix(20).map { record -> String in
             let r = record.receipt
-            let date = r.purchasedAt.formatted(date: .numeric, time: .omitted)
-            let items = r.items.map { "\($0.quantity)x \($0.name) (\(r.currencyCode) \($0.unitPrice))" }.joined(separator: ", ")
-            let category = record.metadata.category.isEmpty ? "Uncategorized" : record.metadata.category
+            let purchaseDateStr = r.purchasedAt.formatted(date: .numeric, time: .omitted)
+            let items = r.items.map { "\($0.quantity)x \($0.name)" }.joined(separator: ", ")
             let profile = r.profile.rawValue.capitalized
             
-            let policies = record.metadata.policies.map { "\($0.kind.rawValue.capitalized): \($0.title)" }.joined(separator: "; ")
-            let notes = record.metadata.notes.trimmingCharacters(in: .whitespacesAndNewlines)
-            let returnDays = r.returnPolicy?.windowDays
+            // 1. Return Window Calculation
+            var returnText = "No return policy logged"
+            if let windowDays = r.returnPolicy?.windowDays {
+                if let returnDeadline = calendar.date(byAdding: .day, value: windowDays, to: r.purchasedAt) {
+                    let deadlineStr = returnDeadline.formatted(date: .numeric, time: .omitted)
+                    let remaining = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: returnDeadline)).day ?? 0
+                    returnText = remaining >= 0 ? "Eligible until \(deadlineStr) (\(remaining) days left)" : "Expired on \(deadlineStr)"
+                }
+            }
 
-            var entry = "• Retailer: \(r.retailer.name) | Date: \(date) | Total: \(r.currencyCode) \(r.total) | Profile: \(profile) | Category: \(category) | Items: [\(items)]"
-            if let returnDays { entry += " | Return Window: \(returnDays) days" }
-            if !policies.isEmpty { entry += " | Policies: [\(policies)]" }
-            if !notes.isEmpty { entry += " | Notes: \(notes)" }
+            // 2. Exact Logged Warranties (No assumptions)
+            let warrantyPolicies = record.metadata.policies.filter { $0.kind == .warranty }
+            var warrantyText = "No explicit warranty logged"
+            if !warrantyPolicies.isEmpty {
+                let formattedWarranties = warrantyPolicies.map { pol -> String in
+                    if let expiryDate = calendar.date(byAdding: .day, value: pol.windowDays, to: r.purchasedAt) {
+                        let daysRemaining = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: expiryDate)).day ?? 0
+                        let expiryStr = expiryDate.formatted(date: .numeric, time: .omitted)
+                        let status = daysRemaining >= 0 ? "Active until \(expiryStr) (\(daysRemaining) days left)" : "Expired on \(expiryStr)"
+                        return "'\(pol.title)' [\(status)]"
+                    }
+                    return "'\(pol.title)' (\(pol.windowDays) days window)"
+                }
+                warrantyText = formattedWarranties.joined(separator: "; ")
+            }
+
+            let notes = record.metadata.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            var entry = "• Retailer: \(r.retailer.name) | Purchased: \(purchaseDateStr) | Total: \(r.currencyCode) \(r.total) | Profile: \(profile) | Items: [\(items)]"
+            entry += "\n  - RETURN WINDOW: \(returnText)"
+            entry += "\n  - WARRANTIES LOGGED: \(warrantyText)"
+            if !notes.isEmpty { entry += "\n  - NOTES: \(notes)" }
             return entry
         }.joined(separator: "\n")
 
-        return "\(summaryHeader)\n\nRECENT PURCHASES:\n\(receiptList)"
+        return "\(summaryHeader)\n\nSAVED RECEIPT DETAILS:\n\(receiptList)"
     }
 
     private func detectAndBuildDashboardInsight(for query: String) -> DashboardInsight? {
@@ -266,12 +274,10 @@ final class AgenticSearchViewModel {
         )
     }
 
-    // MARK: - Multi-Factor Warranty & Link Matching Logic
+    // MARK: - Filter Logic (Strictly Explicit Warranties)
 
     private func findPreciseRelevantRecords(for query: String) -> [ReceiptRecord] {
         let lower = query.lowercased()
-        let now = Date.now
-        let calendar = Calendar.current
 
         if lower.contains("warranty") || lower.contains("warranties") || lower.contains("applecare") || lower.contains("protection") {
             return allRecords.filter { record in
@@ -283,18 +289,14 @@ final class AgenticSearchViewModel {
                 let hasItemWarranty = itemNames.contains(where: { name in
                     name.contains("warranty") || name.contains("applecare") || name.contains("care+") || name.contains("protection")
                 })
-                
-                let categoryLower = record.metadata.category.lowercased()
-                let isTechOrAppliance = categoryLower.contains("electronics") || categoryLower.contains("tech") || categoryLower.contains("appliance") || categoryLower.contains("hardware")
-                
-                let purchaseAgeDays = calendar.dateComponents([.day], from: record.receipt.purchasedAt, to: now).day ?? 0
-                let withinStandardYear = isTechOrAppliance && purchaseAgeDays <= 365
 
-                return hasExplicitWarranty || hasWarrantyNote || hasItemWarranty || withinStandardYear
+                return hasExplicitWarranty || hasWarrantyNote || hasItemWarranty
             }
         }
 
         if lower.contains("return") || lower.contains("eligible") {
+            let now = Date.now
+            let calendar = Calendar.current
             return allRecords.filter { record in
                 guard let days = record.receipt.returnPolicy?.windowDays else { return false }
                 let deadline = calendar.date(byAdding: .day, value: days, to: record.receipt.purchasedAt) ?? .distantPast
@@ -327,13 +329,60 @@ final class AgenticSearchViewModel {
 
     private func fallbackConversationalResponse(for query: String, matchedRecords: [ReceiptRecord]) -> (String, [ReceiptRecord]) {
         let lower = query.lowercased()
+        let calendar = Calendar.current
+        let now = Date.now
 
         if lower.contains("warranty") || lower.contains("warranties") || lower.contains("protection") {
             if matchedRecords.isEmpty {
-                return ("I checked your saved receipts and didn't find any purchases with logged warranty policies, notes, or recent electronics.", [])
+                return ("I checked your saved receipts and didn't find any explicit warranty policies, warranty notes, or extended protection logged.", [])
             }
-            let names = Set(matchedRecords.map { $0.receipt.retailer.name }).joined(separator: ", ")
-            return ("Here are your active or eligible warranty items from **\(names)**. Tap any receipt below to review details:", matchedRecords)
+
+            var warrantySummaries: [String] = []
+
+            for rec in matchedRecords {
+                let retailer = rec.receipt.retailer.name
+                let itemName = rec.receipt.items.first?.name ?? "Item"
+                let warranties = rec.metadata.policies.filter { $0.kind == .warranty }
+
+                if !warranties.isEmpty {
+                    for pol in warranties {
+                        if let expiryDate = calendar.date(byAdding: .day, value: pol.windowDays, to: rec.receipt.purchasedAt) {
+                            let daysRemaining = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: expiryDate)).day ?? 0
+                            let expStr = expiryDate.formatted(date: .numeric, time: .omitted)
+                            if daysRemaining >= 0 {
+                                warrantySummaries.append("**\(itemName)** (\(retailer)): '\(pol.title)' active until **\(expStr)** (\(daysRemaining) days left)")
+                            } else {
+                                warrantySummaries.append("**\(itemName)** (\(retailer)): '\(pol.title)' expired on **\(expStr)**")
+                            }
+                        }
+                    }
+                } else if !rec.metadata.notes.isEmpty {
+                    warrantySummaries.append("**\(itemName)** (\(retailer)): Note - \(rec.metadata.notes)")
+                }
+            }
+
+            if warrantySummaries.isEmpty {
+                return ("I found matching purchase receipts, but none of them have an explicit warranty policy or note logged.", matchedRecords)
+            }
+
+            let text = "Here are your logged warranties:\n\n" + warrantySummaries.joined(separator: "\n")
+            return (text, matchedRecords)
+        }
+
+        if lower.contains("return") {
+            if matchedRecords.isEmpty {
+                return ("You don't have any active return deadlines right now.", [])
+            }
+
+            let returnLines = matchedRecords.prefix(3).compactMap { rec -> String? in
+                guard let window = rec.receipt.returnPolicy?.windowDays,
+                      let deadline = calendar.date(byAdding: .day, value: window, to: rec.receipt.purchasedAt) else { return nil }
+                let daysLeft = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: deadline)).day ?? 0
+                let item = rec.receipt.items.first?.name ?? rec.receipt.retailer.name
+                return "**\(item)** (eligible until \(deadline.formatted(date: .numeric, time: .omitted)), \(daysLeft) days remaining)"
+            }.joined(separator: "; ")
+
+            return ("Active return deadlines: \(returnLines).", matchedRecords)
         }
 
         if lower.contains("business") || lower.contains("personal") {
@@ -347,13 +396,6 @@ final class AgenticSearchViewModel {
 
         if lower.contains("save") || lower.contains("cut") || lower.contains("budget") || lower.contains("spending") || lower.contains("month") {
             return generateSpendingAdvice()
-        }
-
-        if lower.contains("return") {
-            if matchedRecords.isEmpty {
-                return ("You don't have any active return deadlines right now.", [])
-            }
-            return ("You are still inside the return window for these recent purchases:", matchedRecords)
         }
 
         if !matchedRecords.isEmpty {

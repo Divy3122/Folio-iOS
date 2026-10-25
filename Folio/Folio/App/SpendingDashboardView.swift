@@ -1,14 +1,8 @@
-import Observation
 import SwiftUI
 import Charts
+import Observation
 
-private enum SpendingPeriod: String, CaseIterable, Identifiable {
-    case week = "Week"
-    case month = "Month"
-    case year = "Year"
-
-    var id: String { rawValue }
-}
+// MARK: - Dashboard Models
 
 struct SpendingCategory: Identifiable {
     let name: String
@@ -44,62 +38,187 @@ struct DailySpending: Identifiable {
     }
 }
 
+struct MonthlySpending: Identifiable {
+    let date: Date
+    let amount: Decimal
+
+    var id: Date { date }
+
+    var chartValue: Double {
+        NSDecimalNumber(decimal: amount).doubleValue
+    }
+}
+
+enum SpendingChartPage: String, CaseIterable, Identifiable {
+    case categories = "Categories"
+    case retailers = "Retailers"
+    case daily = "Daily Trend"
+    case monthly = "Monthly Trend"
+
+    var id: String { rawValue }
+
+    var symbol: String {
+        switch self {
+        case .categories: return "chart.pie"
+        case .retailers: return "chart.bar.horizontal"
+        case .daily: return "chart.bar"
+        case .monthly: return "calendar"
+        }
+    }
+}
+
+// MARK: - Dashboard View Model
+
 @MainActor
 @Observable
 final class SpendingDashboardViewModel {
-    private let fetchReceipts: FetchReceipts
-    private let repository: (any ReceiptLibraryRepository)?
+
+    let container: DependencyContainer
+    private(set) var services: ReceiptLibraryServices?
 
     private(set) var records: [ReceiptRecord] = []
-    private(set) var isLoading = false
-    private(set) var errorMessage: String?
 
-    var selectedProfile: PurchaseProfile = .personal
-    var selectedPeriod: String = "Month"
-    var selectedCurrency: String = "AUD"
+    var isLoading = false
+    var errorMessage: String?
+
+    var selectedCategory = "All"
+    var selectedPeriod = "Month"
+    var selectedCurrency = "AUD"
+
+    let periods = ["Week", "Month", "Year"]
+
+    let supportedCurrencies = [
+        "AUD", "USD", "EUR", "GBP", "NZD",
+        "CAD", "SGD", "JPY", "INR", "CNY"
+    ]
+
+    private let audPerUnit: [String: Decimal] = [
+        "AUD": 1.0,
+        "USD": 1.52,
+        "EUR": 1.76,
+        "GBP": 2.02,
+        "NZD": 0.88,
+        "CAD": 1.10,
+        "SGD": 1.17,
+        "JPY": 0.010,
+        "INR": 0.018,
+        "CNY": 0.21
+    ]
 
     private let calendar = Calendar.current
     private let now = Date()
 
     init(container: DependencyContainer) {
-        self.fetchReceipts = container.fetchReceipts
-        self.repository = container.receipts as? any ReceiptLibraryRepository
+        self.container = container
     }
 
     func load() async {
-        guard !isLoading else { return }
-
         isLoading = true
         errorMessage = nil
 
+        defer { isLoading = false }
+
         do {
-            if let repository {
-                records = try await repository.search(ReceiptFilter())
-            } else {
-                let receipts = try await fetchReceipts()
-                records = receipts.map { ReceiptRecord(receipt: $0) }
+            let libraryServices = try ReceiptLibraryServices(container: container)
+            self.services = libraryServices
+
+            records = try await libraryServices.searchReceipts(ReceiptFilter.all)
+
+            if !availableCategories.contains(selectedCategory) {
+                selectedCategory = "All"
             }
 
-            if !availableCurrencies.contains(selectedCurrency),
-               let firstCurrency = availableCurrencies.first {
-                selectedCurrency = firstCurrency
+            if !supportedCurrencies.contains(selectedCurrency) {
+                selectedCurrency = "AUD"
             }
         } catch {
             errorMessage = error.localizedDescription
         }
-
-        isLoading = false
     }
+
+    // MARK: Available Filters
 
     var availableCurrencies: [String] {
-        Array(Set(profileRecords.map { $0.receipt.currencyCode })).sorted()
+        supportedCurrencies
     }
 
-    private var profileRecords: [ReceiptRecord] {
-        records.filter { $0.receipt.profile == selectedProfile }
+    var availableCategories: [String] {
+        let categories = Set(
+            records
+                .map { categoryName(for: $0) }
+                .filter {
+                    !$0.isEmpty &&
+                    $0.caseInsensitiveCompare("Other") != .orderedSame &&
+                    $0 != "Uncategorised"
+                }
+        )
+
+        return ["All"] + categories.sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
     }
 
-    private var currentRange: (start: Date, end: Date) {
+    func categoryName(for record: ReceiptRecord) -> String {
+        let category = record.metadata.category
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return category.isEmpty ? "Uncategorised" : category
+    }
+
+    // MARK: Currency Conversion
+
+    private func convert(
+        _ amount: Decimal,
+        from sourceCurrency: String
+    ) -> Decimal? {
+        guard
+            let sourceRate = audPerUnit[sourceCurrency],
+            let targetRate = audPerUnit[selectedCurrency],
+            targetRate != .zero
+        else {
+            return nil
+        }
+
+        return amount * sourceRate / targetRate
+    }
+
+    private func convertedTotal(
+        for record: ReceiptRecord
+    ) -> Decimal? {
+        convert(
+            record.receipt.total,
+            from: record.receipt.currencyCode
+        )
+    }
+
+    private func total(for records: [ReceiptRecord]) -> Decimal {
+        records.reduce(Decimal.zero) { result, record in
+            result + (convertedTotal(for: record) ?? .zero)
+        }
+    }
+
+    private var convertibleRecords: [ReceiptRecord] {
+        records.filter {
+            convertedTotal(for: $0) != nil
+        }
+    }
+
+    var unsupportedCurrencies: [String] {
+        Array(
+            Set(
+                records.compactMap { record in
+                    audPerUnit[record.receipt.currencyCode] == nil
+                        ? record.receipt.currencyCode
+                        : nil
+                }
+            )
+        )
+        .sorted()
+    }
+
+    // MARK: Date Ranges
+
+    private var currentRange: DateInterval {
         let component: Calendar.Component
 
         switch selectedPeriod {
@@ -111,214 +230,372 @@ final class SpendingDashboardViewModel {
             component = .month
         }
 
-        let start = calendar.dateInterval(
+        return calendar.dateInterval(
             of: component,
             for: now
-        )?.start ?? calendar.startOfDay(for: now)
-
-        let end = calendar.date(
-            byAdding: component,
-            value: 1,
-            to: start
-        ) ?? now
-
-        return (start, end)
+        ) ?? DateInterval(
+            start: calendar.startOfDay(for: now),
+            end: now
+        )
     }
 
-    private var currentRecords: [ReceiptRecord] {
-        profileRecords.filter {
-            $0.receipt.currencyCode == selectedCurrency &&
-            $0.receipt.purchasedAt >= currentRange.start &&
-            $0.receipt.purchasedAt < currentRange.end
+    private var previousRange: DateInterval {
+        let duration = currentRange.duration
+
+        return DateInterval(
+            start: currentRange.start.addingTimeInterval(-duration),
+            end: currentRange.start
+        )
+    }
+
+    // MARK: Receipt Filtering
+
+    private var categoryFilteredRecords: [ReceiptRecord] {
+        convertibleRecords.filter { record in
+            selectedCategory == "All" ||
+            categoryName(for: record) == selectedCategory
         }
     }
 
-    private var previousRecords: [ReceiptRecord] {
-        let duration = currentRange.end.timeIntervalSince(currentRange.start)
-        let previousStart = currentRange.start.addingTimeInterval(-duration)
-
-        return profileRecords.filter {
-            $0.receipt.currencyCode == selectedCurrency &&
-            $0.receipt.purchasedAt >= previousStart &&
-            $0.receipt.purchasedAt < currentRange.start
+    var currentReceipts: [ReceiptRecord] {
+        categoryFilteredRecords.filter { record in
+            record.receipt.purchasedAt >= currentRange.start &&
+            record.receipt.purchasedAt < currentRange.end
         }
     }
+
+    private var previousReceipts: [ReceiptRecord] {
+        categoryFilteredRecords.filter { record in
+            record.receipt.purchasedAt >= previousRange.start &&
+            record.receipt.purchasedAt < previousRange.end
+        }
+    }
+
+    // MARK: Summary
 
     var totalSpending: Decimal {
-        currentRecords.reduce(Decimal.zero) { $0 + $1.receipt.total }
+        total(for: currentReceipts)
     }
 
     var previousTotal: Decimal {
-        previousRecords.reduce(Decimal.zero) { $0 + $1.receipt.total }
+        total(for: previousReceipts)
     }
 
     var transactionCount: Int {
-        currentRecords.count
+        currentReceipts.count
     }
 
-    var averageTransaction: Decimal {
-        guard !currentRecords.isEmpty else { return 0 }
-        return totalSpending / Decimal(currentRecords.count)
+    var averageSpending: Decimal {
+        guard !currentReceipts.isEmpty else {
+            return .zero
+        }
+
+        return totalSpending / Decimal(currentReceipts.count)
     }
 
     var spendingChange: Decimal? {
-        guard previousTotal != 0 else { return nil }
-        return ((totalSpending - previousTotal) / previousTotal) * 100
-    }
-
-    var retailerBreakdown: [RetailerSpending] {
-        let grouped = Dictionary(grouping: currentRecords) {
-            $0.receipt.retailer.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard previousTotal > .zero else {
+            return nil
         }
 
-        return grouped.map { name, values in
-            RetailerSpending(
-                name: name.isEmpty ? "Unknown retailer" : name,
-                amount: values.reduce(Decimal.zero) { $0 + $1.receipt.total },
-                transactionCount: values.count
-            )
-        }
-        .sorted { $0.amount > $1.amount }
-    }
-
-    var categoryBreakdown: [SpendingCategory] {
-        var totals: [String: Decimal] = [:]
-
-        for record in currentRecords {
-            let categoryName = record.metadata.category.trimmingCharacters(in: .whitespacesAndNewlines)
-            let key = categoryName.isEmpty ? "Uncategorized" : categoryName
-            totals[key, default: 0] += record.receipt.total
-        }
-
-        return totals.map { name, amount in
-            SpendingCategory(name: name, amount: amount)
-        }
-        .sorted { $0.amount > $1.amount }
-    }
-
-    var dailyBreakdown: [DailySpending] {
-        let grouped = Dictionary(grouping: currentRecords) {
-            calendar.startOfDay(for: $0.receipt.purchasedAt)
-        }
-
-        return grouped.map { date, values in
-            DailySpending(
-                date: date,
-                amount: values.reduce(Decimal.zero) { $0 + $1.receipt.total }
-            )
-        }
-        .sorted { $0.date < $1.date }
+        return ((totalSpending - previousTotal) / previousTotal) * Decimal(100)
     }
 
     func money(_ amount: Decimal) -> String {
         amount.formatted(.currency(code: selectedCurrency))
     }
 
-    var currencySymbol: String {
-        Locale(identifier: "en_AU")
-            .localizedString(forCurrencyCode: selectedCurrency) ?? selectedCurrency
+    // MARK: Category Breakdown
+
+    var categoryBreakdown: [SpendingCategory] {
+        var totals: [String: Decimal] = [:]
+
+        for record in currentReceipts {
+            let category = categoryName(for: record)
+            let amount = convertedTotal(for: record) ?? .zero
+
+            totals[category, default: .zero] += amount
+        }
+
+        return totals.map { name, amount in
+            SpendingCategory(
+                name: name,
+                amount: amount
+            )
+        }
+        .sorted { $0.amount > $1.amount }
+    }
+
+    // MARK: Retailer Breakdown
+
+    var retailerBreakdown: [RetailerSpending] {
+        let grouped = Dictionary(
+            grouping: currentReceipts
+        ) { record in
+            record.receipt.retailer.name.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+        }
+
+        return grouped.map { name, values in
+            RetailerSpending(
+                name: name.isEmpty ? "Unknown retailer" : name,
+                amount: total(for: values),
+                transactionCount: values.count
+            )
+        }
+        .sorted { $0.amount > $1.amount }
+    }
+
+    // MARK: Daily Trend
+
+    var dailyBreakdown: [DailySpending] {
+        let grouped = Dictionary(
+            grouping: currentReceipts
+        ) { record in
+            calendar.startOfDay(
+                for: record.receipt.purchasedAt
+            )
+        }
+
+        return grouped.map { date, values in
+            DailySpending(
+                date: date,
+                amount: total(for: values)
+            )
+        }
+        .sorted { $0.date < $1.date }
+    }
+
+    // MARK: Monthly Trend
+
+    var monthlyBreakdown: [MonthlySpending] {
+        let startOfThisMonth = calendar.dateInterval(
+            of: .month,
+            for: now
+        )?.start ?? now
+
+        let monthStarts = (0..<6).compactMap { offset in
+            calendar.date(
+                byAdding: .month,
+                value: -offset,
+                to: startOfThisMonth
+            )
+        }.reversed()
+
+        return monthStarts.map { monthStart in
+            let nextMonth = calendar.date(
+                byAdding: .month,
+                value: 1,
+                to: monthStart
+            ) ?? monthStart
+
+            let monthlyRecords = categoryFilteredRecords.filter {
+                $0.receipt.purchasedAt >= monthStart &&
+                $0.receipt.purchasedAt < nextMonth
+            }
+
+            return MonthlySpending(
+                date: monthStart,
+                amount: total(for: monthlyRecords)
+            )
+        }
     }
 }
 
+// MARK: - Spending Dashboard View
+
 struct SpendingDashboardView: View {
+
     @State private var model: SpendingDashboardViewModel
-    @State private var showAgentSearch = false
-    private let container: DependencyContainer
+    @State private var selectedChart: SpendingChartPage = .categories
+    @State private var showingAgenticSearch = false
 
     init(container: DependencyContainer) {
-        self.container = container
-        _model = State(initialValue: SpendingDashboardViewModel(container: container))
+        _model = State(
+            initialValue: SpendingDashboardViewModel(
+                container: container
+            )
+        )
+    }
+
+    // Dynamic Overview Card Background strictly switching between allowed tokens
+    private var overviewCardBackground: Color {
+        guard let change = model.spendingChange else {
+            return Color.CardBackground
+        }
+        if change > 0 {
+            return Color.ErrorRed.opacity(0.15)
+        } else if change < 0 {
+            return Color.SuccessGreen.opacity(0.15)
+        } else {
+            return Color.WarningAmber.opacity(0.15)
+        }
+    }
+
+    // Status Subtext Color strictly using allowed tokens
+    private var overviewStatusColor: Color {
+        guard let change = model.spendingChange else {
+            return .secondary
+        }
+        if change > 0 {
+            return Color.ErrorRed
+        } else if change < 0 {
+            return Color.SuccessGreen
+        } else {
+            return Color.WarningAmber
+        }
     }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                profilePicker
-                periodPicker
-                currencyPicker
+            VStack(alignment: .leading, spacing: 20) {
+                categorySelector
+                periodSelector
+                currencySelector
 
                 if model.isLoading {
                     ProgressView("Loading spending...")
                         .frame(maxWidth: .infinity)
-                } else if let message = model.errorMessage {
-                    ContentUnavailableView {
-                        Label("Unable to load spending", systemImage: "exclamationmark.triangle")
-                    } description: {
-                        Text(message)
-                    } actions: {
-                        Button("Try Again") { Task { await model.load() } }
-                    }
-                } else {
-                    summarySection
-                    categorySection
-                    retailerSection
-                    trendSection
                 }
+
+                if let error = model.errorMessage {
+                    Text(error)
+                        .font(.subheadline)
+                        .foregroundStyle(Color.ErrorRed)
+                }
+
+                if !model.unsupportedCurrencies.isEmpty {
+                    Text(
+                        "Receipts in \(model.unsupportedCurrencies.joined(separator: ", ")) " +
+                        "are excluded because no conversion rate is configured."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+                summarySection
+                chartsSection
             }
-            .padding()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle("Spending")
+        .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    showAgentSearch = true
+                    showingAgenticSearch = true
                 } label: {
-                    Label("AI Assistant", systemImage: "sparkles")
-                        .font(.headline)
-                        .foregroundStyle(Color.BrandTeal)
+                    Image(systemName: "sparkles")
+                        .font(.title3.weight(.semibold))
                 }
             }
         }
-        .sheet(isPresented: $showAgentSearch) {
-            if let services = (try? ReceiptLibraryServices(container: container)) ?? ReceiptSavingContext.current?.services {
+        .task {
+            await model.load()
+        }
+        .sheet(isPresented: $showingAgenticSearch) {
+            if let services = model.services {
                 AgenticSearchSheetView(services: services)
             }
         }
-        .task { await model.load() }
-        .onChange(of: model.selectedProfile) { refreshCurrencyIfNeeded() }
     }
 
-    private var profilePicker: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Profile")
+    // MARK: Category Selector
+
+    private var categorySelector: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Categories")
                 .font(.headline)
 
-            Picker("Profile", selection: $model.selectedProfile) {
-                Text("Personal").tag(PurchaseProfile.personal)
-                Text("Business").tag(PurchaseProfile.business)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(model.availableCategories, id: \.self) { category in
+                        Button {
+                            model.selectedCategory = category
+                        } label: {
+                            Text(category)
+                                .font(.subheadline.weight(.medium))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                                .background {
+                                    Capsule()
+                                        .fill(
+                                            model.selectedCategory == category
+                                                ? Color.accentColor
+                                                : Color.CardBackground
+                                        )
+                                }
+                                .foregroundStyle(
+                                    model.selectedCategory == category
+                                        ? Color.white
+                                        : Color.primary
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
             }
-            .pickerStyle(.segmented)
         }
     }
 
-    private var periodPicker: some View {
+    // MARK: Period Selector
+
+    private var periodSelector: some View {
         Picker("Period", selection: $model.selectedPeriod) {
-            Text("Week").tag("Week")
-            Text("Month").tag("Month")
-            Text("Year").tag("Year")
+            ForEach(model.periods, id: \.self) { period in
+                Text(period).tag(period)
+            }
         }
         .pickerStyle(.segmented)
     }
 
-    @ViewBuilder
-    private var currencyPicker: some View {
-        if !model.availableCurrencies.isEmpty {
-            Picker("Currency", selection: $model.selectedCurrency) {
-                ForEach(model.availableCurrencies, id: \.self) {
-                    Text($0).tag($0)
+    // MARK: Currency Selector
+
+    private var currencySelector: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("Currency", systemImage: "dollarsign.circle")
+
+                Spacer()
+
+                Menu {
+                    ForEach(model.availableCurrencies, id: \.self) { currency in
+                        Button {
+                            model.selectedCurrency = currency
+                        } label: {
+                            if currency == model.selectedCurrency {
+                                Label(
+                                    currency,
+                                    systemImage: "checkmark"
+                                )
+                            } else {
+                                Text(currency)
+                            }
+                        }
+                    }
+                } label: {
+                    Label(
+                        model.selectedCurrency,
+                        systemImage: "chevron.down"
+                    )
+                    .fontWeight(.medium)
                 }
             }
-            .pickerStyle(.menu)
         }
     }
+
+    // MARK: Summary
 
     private var summarySection: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Overview")
-                .font(.title2.bold())
+                .font(.headline)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Total spending")
+                Text("Total Spending")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
@@ -334,36 +611,37 @@ struct SpendingDashboardView: View {
                     )
 
                     Label(
-                        "\(change >= 0 ? "+" : "")\(percentage)% vs previous period",
-                        systemImage: change > 0
+                        "\(change >= 0 ? "+" : "")\(percentage)% compared with previous period",
+                        systemImage: change >= 0
                             ? "arrow.up.right"
-                            : change < 0
-                                ? "arrow.down.right"
-                                : "minus"
+                            : "arrow.down.right"
                     )
-                    .font(.subheadline)
-                    .foregroundStyle(change > 0 ? .orange : .secondary)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(overviewStatusColor)
                 } else {
-                    Text("No previous spending to compare")
+                    Text("No previous-period spending to compare")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+            .padding()
+            .background(
+                overviewCardBackground,
+                in: RoundedRectangle(cornerRadius: 18)
+            )
 
             HStack(spacing: 12) {
                 summaryCard(
                     title: "Transactions",
                     value: "\(model.transactionCount)",
-                    icon: "receipt"
+                    symbol: "receipt"
                 )
 
                 summaryCard(
-                    title: "Average",
-                    value: model.money(model.averageTransaction),
-                    icon: "chart.bar"
+                    title: "Average Receipt",
+                    value: model.money(model.averageSpending),
+                    symbol: "chart.bar"
                 )
             }
         }
@@ -372,153 +650,218 @@ struct SpendingDashboardView: View {
     private func summaryCard(
         title: String,
         value: String,
-        icon: String
+        symbol: String
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(title, systemImage: icon)
+            Image(systemName: symbol)
+                .foregroundStyle(.tint)
+
+            Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             Text(value)
                 .font(.headline)
-                .minimumScaleFactor(0.7)
                 .lineLimit(1)
+                .minimumScaleFactor(0.65)
         }
+        .frame(maxWidth: .infinity, minHeight: 95, alignment: .leading)
         .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .background(
+            Color.CardBackground,
+            in: RoundedRectangle(cornerRadius: 16)
+        )
     }
 
-    private var categorySection: some View {
+    // MARK: Swipeable Charts
+
+    private var chartsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Spending by category")
-                .font(.title3.bold())
+            HStack {
+                Text("Spending Analytics")
+                    .font(.headline)
 
-            Text("Based on saved receipt categories.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                Spacer()
 
+                Text("Swipe to explore")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            TabView(selection: $selectedChart) {
+                categoryChart
+                    .tag(SpendingChartPage.categories)
+
+                retailerChart
+                    .tag(SpendingChartPage.retailers)
+
+                dailyChart
+                    .tag(SpendingChartPage.daily)
+
+                monthlyChart
+                    .tag(SpendingChartPage.monthly)
+            }
+            .frame(height: 350)
+            .tabViewStyle(.page(indexDisplayMode: .always))
+        }
+    }
+
+    // MARK: Chart 1 - Category Breakdown
+
+    private var categoryChart: some View {
+        chartCard(
+            title: "Spending by Category",
+            subtitle: "How your spending is distributed"
+        ) {
             if model.categoryBreakdown.isEmpty {
-                emptyMessage("No category data for this period.")
+                emptyChartMessage
             } else {
                 Chart(model.categoryBreakdown) { category in
                     SectorMark(
-                        angle: .value("Amount", max(0, category.chartValue)),
-                        innerRadius: .ratio(0.6),
+                        angle: .value("Spending", category.chartValue),
+                        innerRadius: .ratio(0.55),
                         angularInset: 2
                     )
                     .foregroundStyle(
                         by: .value("Category", category.name)
                     )
-                }
-                .frame(height: 220)
-                .accessibilityLabel("Spending by category")
-
-                ForEach(model.categoryBreakdown) { category in
-                    HStack {
-                        Text(category.name)
-                        Spacer()
-                        Text(model.money(category.amount))
-                            .fontWeight(.semibold)
+                    .annotation(position: .overlay) {
+                        if category.chartValue > 0 {
+                            Text(category.name)
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                        }
                     }
-                    .font(.subheadline)
                 }
+                .chartLegend(position: .bottom, spacing: 8)
             }
         }
     }
 
-    private var retailerSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Top retailers")
-                .font(.title3.bold())
+    // MARK: Chart 2 - Retailer Breakdown
 
-            if model.retailerBreakdown.isEmpty {
-                emptyMessage("No retailer spending for this period.")
+    private var retailerChart: some View {
+        chartCard(
+            title: "Spending by Retailer",
+            subtitle: "Your top five retailers"
+        ) {
+            let retailers = Array(
+                model.retailerBreakdown.prefix(5)
+            )
+
+            if retailers.isEmpty {
+                emptyChartMessage
             } else {
-                Chart(Array(model.retailerBreakdown.prefix(5))) { retailer in
+                Chart(retailers) { retailer in
                     BarMark(
                         x: .value("Spending", retailer.chartValue),
                         y: .value("Retailer", retailer.name)
                     )
-                    .foregroundStyle(.blue.gradient)
+                    .foregroundStyle(Color.accentColor.gradient)
                     .annotation(position: .trailing) {
                         Text(model.money(retailer.amount))
                             .font(.caption2)
                     }
                 }
-                .frame(
-                    height: CGFloat(
-                        min(model.retailerBreakdown.count, 5) * 48
-                    )
-                )
-                .chartXAxisLabel("Spending")
-            }
-
-            ForEach(Array(model.retailerBreakdown.prefix(5))) { retailer in
-                HStack {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(retailer.name)
-                            .fontWeight(.medium)
-
-                        Text("\(retailer.transactionCount) transactions")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer()
-
-                    Text(model.money(retailer.amount))
-                        .fontWeight(.semibold)
+                .chartXAxis {
+                    AxisMarks(position: .bottom)
                 }
             }
         }
     }
 
-    private var trendSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Spending trend")
-                .font(.title3.bold())
+    // MARK: Chart 3 - Daily Trend
 
+    private var dailyChart: some View {
+        chartCard(
+            title: "Daily Spending",
+            subtitle: "Spending over the selected period"
+        ) {
             if model.dailyBreakdown.isEmpty {
-                emptyMessage("No spending trend available.")
+                emptyChartMessage
             } else {
                 Chart(model.dailyBreakdown) { day in
                     BarMark(
-                        x: .value("Date", day.date, unit: .day),
+                        x: .value("Date", day.date),
                         y: .value("Spending", day.chartValue)
                     )
-                    .foregroundStyle(.teal.gradient)
+                    .foregroundStyle(Color.teal.gradient)
+                    .cornerRadius(4)
                 }
-                .frame(height: 200)
-                .chartYAxisLabel("Amount (\(model.selectedCurrency))")
+                .chartXAxis {
+                    AxisMarks(values: .automatic(desiredCount: 5)) { AxisValue in
+                        AxisValueLabel(
+                            format: .dateTime.day().month(.abbreviated)
+                        )
+                    }
+                }
             }
         }
     }
 
-    private func emptyMessage(_ message: String) -> some View {
-        ContentUnavailableView(
-            message,
-            systemImage: "chart.bar.xaxis"
-        )
-        .frame(minHeight: 100)
-    }
+    // MARK: Chart 4 - Monthly Trend
 
-    private func refreshCurrencyIfNeeded() {
-        if !model.availableCurrencies.contains(model.selectedCurrency),
-           let first = model.availableCurrencies.first {
-            model.selectedCurrency = first
+    private var monthlyChart: some View {
+        chartCard(
+            title: "Monthly Spending",
+            subtitle: "Compare the last six months"
+        ) {
+            if model.monthlyBreakdown.isEmpty {
+                emptyChartMessage
+            } else {
+                Chart(model.monthlyBreakdown) { month in
+                    BarMark(
+                        x: .value("Month", month.date, unit: .month),
+                        y: .value("Spending", month.chartValue)
+                    )
+                    .foregroundStyle(Color.purple.gradient)
+                    .cornerRadius(5)
+                }
+                .chartXAxis {
+                    AxisMarks(values: .stride(by: .month)) { AxisValue in
+                        AxisValueLabel(
+                            format: .dateTime.month(.abbreviated)
+                        )
+                    }
+                }
+            }
         }
     }
-}
 
-#Preview {
-    if let container = try? DependencyContainer.live() {
-        SpendingDashboardView(container: container)
-    } else {
+    // MARK: Chart Components
+
+    private func chartCard<Content: View>(
+        title: String,
+        subtitle: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            content()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            Color.CardBackground,
+            in: RoundedRectangle(cornerRadius: 18)
+        )
+    }
+
+    private var emptyChartMessage: some View {
         ContentUnavailableView(
-            "Preview Unavailable",
-            systemImage: "exclamationmark.triangle",
-            description: Text("Could not initialise the data container.")
+            "No Spending Data",
+            systemImage: "chart.bar",
+            description: Text(
+                "Receipts for this selection will appear here."
+            )
         )
     }
 }
