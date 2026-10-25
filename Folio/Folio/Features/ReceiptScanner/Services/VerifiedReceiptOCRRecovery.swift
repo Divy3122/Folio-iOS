@@ -1,10 +1,86 @@
 import Foundation
 
-/// Conservative recovery for a complete, legible OCR receipt table.
-/// Inspired by deterministic receipt parsers: OCR rows remain the evidence;
-/// the model is not trusted to manufacture amounts or table structure.
-/// This only fills an EMPTY product breakdown when accounting reconciles.
+/// OCR-backed recovery. Production uses independent printed fields; the older
+/// reconciled-table helper remains for compatibility and is not used by scanning.
 enum VerifiedReceiptOCRRecovery {
+    /// Transcription-only fallback: copy independently readable rows without
+    /// requiring item sums, tax calculations or subtotal reconciliation.
+    static func recoverPrintedFields(_ result: ReceiptExtractionResult,
+                                     from rawText: String, excludedLines: Set<Int> = []) -> ReceiptExtractionResult {
+        var updated = result
+        var costs = result.costBreakdown ?? ReceiptCostBreakdown()
+        let lines = rawText.components(separatedBy: .newlines)
+        let chunk = ReceiptOCRChunk(startLine: 1, lines: lines)
+        // Remove non-product proposals from either model pass before recovery.
+        costs.products.removeAll { item in
+            guard ReceiptOCRRowKind.classify(item.name) == .product else { return true }
+            let matches = lines.indices.filter { key(lines[$0]).contains(key(item.name)) }
+            return !matches.isEmpty && matches.allSatisfy { !ReceiptOCRRowKind.isProductRow(at: $0, lines: lines) }
+        }
+        var covered = Set<Int>()
+        var positions: [UUID: Int] = [:]
+        for index in costs.products.indices {
+            let item = costs.products[index]
+            guard let anchor = ReceiptExtractionMapper.productAnchor(
+                name: item.name, sourceLine: 0, chunk: chunk) else { continue }
+            positions[item.id] = anchor.offset
+            covered.formUnion(anchor.offset..<(anchor.offset + anchor.context.components(separatedBy: .newlines).count))
+            let monetaryTokens = printedMoney.matches(in: anchor.context, range: NSRange(anchor.context.startIndex..., in: anchor.context))
+            if item.lineTotal == nil, monetaryTokens.count == 1,
+               let pair = amountPair(anchor.context),
+               pair.label.rangeOfCharacter(from: .letters) != nil {
+                costs.products[index].lineTotal = pair.amount
+            }
+        }
+        // Exact repeated names need separate physical rows rather than the
+        // unique-name relocation above. Consume each existing occurrence once.
+        var existing = Array(costs.products.indices)
+        var inSummary = false
+        for (offset, line) in lines.enumerated() {
+            if line.hasPrefix("Page ") { inSummary = false; continue }
+            let kind = ReceiptOCRRowKind.classify(line)
+            if kind == .financialSummary || ReceiptOCRRowKind.closesProductTable(line) { inSummary = true }
+            guard !inSummary, !covered.contains(offset), !excludedLines.contains(offset + 1) else { continue }
+            guard let pair = amountPair(line), safeProductName(pair.label) else { continue }
+            if let position = existing.firstIndex(where: {
+                key(costs.products[$0].name) == key(pair.label) &&
+                (costs.products[$0].lineTotal == nil || costs.products[$0].lineTotal == pair.amount)
+            }) {
+                let index = existing.remove(at: position)
+                positions[costs.products[index].id] = offset
+                costs.products[index].lineTotal = costs.products[index].lineTotal ?? pair.amount
+            } else {
+                // Multiple monetary columns require model pairing; do not turn
+                // a unit-price column into part of a fabricated product name.
+                guard amountPair(pair.label) == nil else { continue }
+                let added = ReceiptCostBreakdown.Product(name: pair.label, quantity: nil, unitPrice: nil,
+                    lineTotal: pair.amount, discount: nil, isReturn: pair.amount < 0)
+                positions[added.id] = offset
+                costs.products.append(added)
+            }
+        }
+        costs.products = costs.products.enumerated().sorted {
+            let left = positions[$0.element.id] ?? Int.max
+            let right = positions[$1.element.id] ?? Int.max
+            return left == right ? $0.offset < $1.offset : left < right
+        }.map(\.element)
+        let printed = ReceiptSimpleTotals.read(ocrText: rawText)
+        costs.subtotal = costs.subtotal ?? printed.subtotal
+        costs.tax = costs.tax ?? printed.tax
+        costs.fees = costs.fees ?? printed.fees
+        let conflicting = result.reviewWarnings.contains {
+            $0.localizedCaseInsensitiveContains("conflicting") && $0.localizedCaseInsensitiveContains("total")
+        }
+        if printed.hasConflictingTotals {
+            costs.total = nil
+            updated.reviewWarnings.append("Conflicting printed final-total values require review.")
+        } else if !conflicting { costs.total = costs.total ?? printed.total }
+        updated.costBreakdown = costs
+        return updated
+    }
+
+    private static let printedMoney = ReceiptAmountParser.moneyRegex
+
     private struct Candidate {
         var products: [ReceiptCostBreakdown.Product] = []
         var subTotals: [Decimal] = []
@@ -14,8 +90,7 @@ enum VerifiedReceiptOCRRecovery {
     }
 
     private static let amountAtEnd = try! NSRegularExpression(
-        pattern: #"(?<![A-Za-z0-9])((?:(?:A\$|GBP|EUR|AUD|USD|NZD|[$£€¥])\s*)?[-+]?[0-9]{1,9}[.,][0-9]{2})\s*$"#,
-        options: [.caseInsensitive]
+        pattern: ReceiptAmountParser.moneyTokenPattern + #"\s*$"#, options: .caseInsensitive
     )
     private static let multiplier = try! NSRegularExpression(
         pattern: #"\s+[x×]\s*([0-9]+(?:[.,][0-9]+)?)\s*$"#,

@@ -16,7 +16,7 @@ enum ReceiptOCRRowKind {
     case product, financialSummary, paymentMetadata, heading, other
 
     private static let summaries = [
-        "SUB TOTAL", "SUBTOTAL", "TOTAL", "GRAND TOTAL", "VAT", "GST", "TAX",
+        "SUB TOTAL", "SUBTOTAL", "TOTAL", "GRAND TOTAL", "VAT", "GST", "TAX", "SALES TAX",
         "DISCOUNT", "SAVING", "ROUNDING", "FEE", "SURCHARGE", "BALANCE",
         "AMOUNT DUE", "AMOUNT PAID", "TIP", "GRATUITY", "SERVICE", "DELIVERY",
         "SHIPPING", "DONATION"
@@ -34,6 +34,24 @@ enum ReceiptOCRRowKind {
         "BEVERAGES", "GROCERIES", "ENTREES", "SNACKS", "APPETIZERS", "MERCHANDISE"
     ]
 
+    static func closesProductTable(_ row: String) -> Bool {
+        row.trimmingCharacters(in: .whitespaces).range(
+            of: #"(?i)^(?:THANK\s+YOU\b|PAYMENT\s+(?:TYPE|METHOD)\b|CASH\s+TENDER\b|CHANGE\s+[$£€¥+-]?[0-9])"#,
+            options: .regularExpression) != nil
+    }
+
+    /// Payment/thank-you text closes the item table for this page. A summary
+    /// printed above the table does not: some receipts put totals at the top.
+    static func isProductRow(at index: Int, lines: [String]) -> Bool {
+        guard lines.indices.contains(index), classify(lines[index]) == .product else { return false }
+        for previous in stride(from: index, through: 0, by: -1) {
+            let row = lines[previous].trimmingCharacters(in: .whitespaces)
+            if row.range(of: #"(?i)^Page [0-9]+$"#, options: .regularExpression) != nil { break }
+            if closesProductTable(row) { return false }
+        }
+        return true
+    }
+
     static func classify(_ text: String) -> Self {
         let raw = text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         if raw.range(of: #"^[A-Z]{2,12}\s*#"#, options: .regularExpression) != nil {
@@ -42,7 +60,15 @@ enum ReceiptOCRRowKind {
         let words = raw.replacingOccurrences(of: #"[^\p{L}\p{N}]+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
         func matches(_ fields: [String]) -> Bool {
-            fields.contains { words == $0 || words.hasPrefix($0 + " ") }
+            fields.contains { field in
+                if words == field { return true }
+                guard words.hasPrefix(field + " ") else { return false }
+                // A common receipt word can also begin a real product name.
+                guard ["TOTAL", "TAX", "CASH", "CHANGE", "CREDIT", "DEBIT"].contains(field) else { return true }
+                let remainder = String(words.dropFirst(field.count + 1))
+                return remainder.range(of: #"^(?:[0-9]|DUE\b|PAID\b|AMOUNT\b|INCL|EXCL|TENDER\b|CARD\b|NOTE\b|ITEMS\s+[0-9])"#,
+                                       options: .regularExpression) != nil
+            }
         }
         if headings.contains(words) { return .heading }
         if matches(otherFields) { return .other }
@@ -62,10 +88,7 @@ enum ReceiptProductEvidenceVerifier {
         let product: ReceiptCostBreakdown.Product
     }
 
-    private static let amountPattern = try! NSRegularExpression(
-        pattern: #"(?<![A-Za-z0-9])((?:(?:A\$|AUD|USD|NZD|EUR|GBP|[$£€¥])\s*)?[-+]?[0-9]{1,9}[.,][0-9]{2})(?![A-Za-z0-9])"#,
-        options: [.caseInsensitive]
-    )
+    private static let amountPattern = ReceiptAmountParser.moneyRegex
 
     private static func clean(_ text: String) -> String {
         String(text.lowercased().unicodeScalars.filter {
@@ -163,6 +186,10 @@ enum ReceiptProductEvidenceVerifier {
         }
     }
 
+    static func matchesPrintedLineCost(_ amount: Decimal, in context: String) -> Bool {
+        amountTokens(in: context).last?.price == amount
+    }
+
     /// Match against the anchored OCR line; allow the next line only for a
     /// wrapped name or a price-only line. Never take a price from the next product.
     static func verify(
@@ -199,9 +226,7 @@ enum ReceiptProductEvidenceVerifier {
 
             // Reuse the mapper's verified identity/continuation span. The old
             // second two-line check discarded valid three-line and currency-code rows.
-            let prices = amountTokens(in: resolved.context)
-            guard let printedLineCost = prices.last?.price,
-                  printedLineCost == proposedAmount else {
+            guard matchesPrintedLineCost(proposedAmount, in: resolved.context) else {
                 diagnose("Rejected \(proposal.name): proposed price is not the printed line cost.")
                 continue
             }
@@ -226,7 +251,7 @@ enum ReceiptProductEvidenceVerifier {
                     unitPrice: nil,
                     lineTotal: proposedAmount,
                     discount: nil,
-                    isReturn: false
+                    isReturn: proposedAmount < 0
                 )
             ))
             claimedLines.formUnion(resolvedLine..<(resolvedLine + resolved.context.components(separatedBy: .newlines).count))

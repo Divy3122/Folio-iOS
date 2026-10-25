@@ -1,31 +1,38 @@
 import Foundation
 
-/// Reads the printed Subtotal and Final Total without asking AI to classify
-/// GST, shipping, discounts, fees or rounding. Product recognition is separate.
+/// Copies printed summaries independently. Never balances receipt arithmetic.
 enum ReceiptSimpleTotals {
     struct Amounts: Equatable {
         let subtotal: Decimal?
         let total: Decimal?
 
-        /// Signed balancing difference; it is NOT proof of a separately charged fee.
+        var tax: Decimal? = nil
+        var fees: Decimal? = nil
+        var hasConflictingTotals = false
+        var hasConflictingSubtotals = false
         var additionalFees: Decimal? {
-            guard let subtotal, let total else { return nil }
-            return total - subtotal
+            guard tax != nil || fees != nil else { return nil }
+            return (tax ?? 0) + (fees ?? 0)
         }
+
     }
 
     // These labels must start a line. A description such as "Subtotal (excl. VAT)"
     // may appear between the label and the printed amount.
     private static let subtotalPattern = #"^\s*sub[\s-]*total\b"#
 
-    // Prefer a precise printed total label when more than one TOTAL appears.
+    // Recognise printed total labels; distinct values remain unresolved.
     private static let finalTotalLabels = [
         "total amount paid", "grand total", "final total", "total due",
         "amount due", "total paid", "balance due", "amount paid", "total"
     ]
 
-    private static let numberPattern = #"([+-]?(?:[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]+(?:[\.,][0-9]{1,2})?))"#
-    private static let amountOnlyPattern = #"^\s*(?:AUD|USD|NZD|GBP|EUR)?\s*[$£€¥]?\s*"# + numberPattern + #"\s*$"#
+    // Copy printed charges only. Included tax is displayed as receipt information,
+    // never added to the printed final total. Percentage qualifiers are not amounts.
+    private static let chargePattern = #"^\s*(?:(?:includes?|included)\s+)?(?:GST|VAT|(?:sales\s+)?tax|shipping|delivery|service(?:\s+charge)?|surcharge|bag\s+fee|additional\s+fees?)\b(?:\s+[0-9]+(?:[.,][0-9]+)?%?(?=\s+[$£€¥+-]?[0-9]))?"#
+
+    private static let numberPattern = #"([+-]?(?:[0-9]{1,3}(?:[.,][0-9]{3})+[.,][0-9]{1,2}|[0-9]+(?:[.,][0-9]{1,2})?))"#
+    private static let amountOnlyPattern = #"^\s*(?:A\$|AUD|USD|NZD|GBP|EUR|CAD|CHF|JPY)?\s*[$£€¥]?\s*"# + numberPattern + #"\s*$"#
 
     // Parenthesised text is part of the LABEL, not the value:
     //   Subtotal (excl. VAT): £66,20
@@ -38,37 +45,57 @@ enum ReceiptSimpleTotals {
         let lines = ocrText.components(separatedBy: .newlines)
         var subtotal: Decimal?
         var total: Decimal?
-        var bestTotalPriority = Int.max
+        var printedTaxes: [Decimal] = []
+        var printedFees: [Decimal] = []
+        var totalValues: [Decimal] = []
+        var subtotalValues: [Decimal] = []
 
         for index in lines.indices {
             let line = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
 
-            if subtotal == nil {
-                subtotal = labelledAmount(on: line, labelPattern: subtotalPattern)
-                    ?? amountOnNextLine(after: line, at: index, in: lines, labelPattern: subtotalPattern)
+            if let value = labelledAmount(on: line, labelPattern: subtotalPattern)
+                ?? amountOnNextLine(after: line, at: index, in: lines, labelPattern: subtotalPattern) {
+                subtotalValues.append(value)
             }
 
-            for (priority, label) in finalTotalLabels.enumerated() where priority <= bestTotalPriority {
+            if let charge = labelledAmount(on: line, labelPattern: chargePattern)
+                ?? amountOnNextLine(after: line, at: index, in: lines, labelPattern: chargePattern) {
+                if matches(line, pattern: #"^\s*(?:(?:includes?|included)\s+)?(?:GST|VAT|(?:sales\s+)?tax)\b"#) {
+                    printedTaxes.append(charge)
+                } else { printedFees.append(charge) }
+            }
+
+            if let included = matchedAmount(in: line,
+                pattern: #"^\s*includes?\s+(?:A\$|AUD|USD|NZD|GBP|EUR|CAD|CHF|JPY)?\s*[$£€¥]?\s*"# + numberPattern + #"\s+(?:GST|VAT|tax)\s*$"#) {
+                printedTaxes.append(included)
+            }
+
+            for label in finalTotalLabels {
                 let labelPattern = #"^\s*"#
                     + label.split(separator: " ").map { NSRegularExpression.escapedPattern(for: String($0)) }.joined(separator: #"\s+"#)
                     + #"\b"#
 
                 if let value = labelledAmount(on: line, labelPattern: labelPattern)
                     ?? amountOnNextLine(after: line, at: index, in: lines, labelPattern: labelPattern) {
-                    total = value
-                    bestTotalPriority = priority
+                    totalValues.append(value)
                     break
                 }
             }
         }
-        return Amounts(subtotal: subtotal, total: total)
+        subtotal = Set(subtotalValues).count == 1 ? subtotalValues.first : nil
+        total = Set(totalValues).count == 1 ? totalValues.first : nil
+        return Amounts(subtotal: subtotal, total: total,
+                       tax: printedTaxes.isEmpty ? nil : printedTaxes.reduce(0, +),
+                       fees: printedFees.isEmpty ? nil : printedFees.reduce(0, +),
+                       hasConflictingTotals: Set(totalValues).count > 1,
+                       hasConflictingSubtotals: Set(subtotalValues).count > 1)
     }
 
     /// Accept a money amount ONLY after the recognised field label and optional
     /// printed parenthetical qualifiers. Never interpret shipping/GST as subtotal.
     private static func labelledAmount(on line: String, labelPattern: String) -> Decimal? {
         let pattern = labelPattern
-            + #"(?:"# + qualifierPattern + #")*\s*[:\-–]?\s*(?:AUD|USD|NZD|GBP|EUR)?\s*[$£€¥]?\s*"#
+            + #"(?:"# + qualifierPattern + #")*\s*[:–]?\s*(?:A\$|AUD|USD|NZD|GBP|EUR|CAD|CHF|JPY)?\s*[$£€¥]?\s*"#
             + numberPattern + #"\s*$"#
         return matchedAmount(in: line, pattern: pattern)
     }
@@ -106,6 +133,9 @@ enum ReceiptSimpleTotals {
                 notes.append("Product \(index + 1): enter a valid price.")
             }
         }
+        if !draft.fees.isEmpty, ReceiptAmountParser.parse(draft.fees) == nil {
+            notes.append("Enter a valid printed tax/fee amount.")
+        }
         if ReceiptAmountParser.parse(draft.subtotal) == nil {
             notes.append("Enter the printed subtotal.")
         }
@@ -116,22 +146,28 @@ enum ReceiptSimpleTotals {
     }
 
     /// Apply this after existing product extraction; disregard model financial
-    /// categories. The review computes additional fees as total minus subtotal.
-    static func simplify(_ draft: inout ReceiptReviewDraft, ocrText: String) {
+    /// categories. Only explicitly printed tax and fee components are combined.
+    static func simplify(_ draft: inout ReceiptReviewDraft, ocrText: String, allowTotalFallback: Bool = true) {
         let values = read(ocrText: ocrText)
-        draft.subtotal = ReceiptAmountParser.text(values.subtotal)
-        draft.total = ReceiptAmountParser.text(values.total)
+        if ReceiptAmountParser.parse(draft.subtotal) == nil {
+            draft.subtotal = ReceiptAmountParser.text(values.subtotal)
+        }
+        if allowTotalFallback, ReceiptAmountParser.parse(draft.total) == nil {
+            draft.total = ReceiptAmountParser.text(values.total)
+        }
+        let printedTax = ReceiptAmountParser.parse(draft.tax) ?? values.tax
+        let printedFees = ReceiptAmountParser.parse(draft.fees) ?? values.fees
+        if printedTax != nil || printedFees != nil {
+            draft.fees = ReceiptAmountParser.text((printedTax ?? 0) + (printedFees ?? 0))
+        } else {
+            draft.fees = ReceiptAmountParser.text(values.additionalFees)
+        }
         draft.discounts = ""
         draft.tax = ""
-        draft.fees = ""
         draft.rounding = ""
         draft.taxTreatment = .unknown
         draft.discountTreatment = .unknown
-        for index in draft.products.indices {
-            draft.products[index].quantity = ""
-            draft.products[index].unitPrice = ""
-            draft.products[index].discount = ""
-        }
+
     }
 }
 

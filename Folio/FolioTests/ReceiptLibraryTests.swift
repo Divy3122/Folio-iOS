@@ -312,14 +312,14 @@ final class ReceiptLibraryTests: XCTestCase {
         XCTAssertEqual(SavedRetailer(name: "Empty").defaultWarrantyMonths, 0)
     }
 
-    func testChoosingARetailerAppliesOnlyTheChosenReturnPolicyAndWarrantyLength() {
+    func testChoosingARetailerAppliesOnlySelectedPoliciesWithoutChangingTheirDuration() {
         let short = SavedPolicy(kind: .returns, title: "Change of mind", windowDays: 30)
         let long = SavedPolicy(kind: .returns, title: "Faulty", windowDays: 365)
         let warranty = SavedPolicy(kind: .warranty, title: "Manufacturer", windowDays: 365)
         let retailer = SavedRetailer(name: "JB Hi-Fi", policies: [short, long, warranty])
         let model = ReceiptSaveViewModel(costs: ReceiptCostBreakdown(), pages: [])
 
-        model.applyRetailerChoice(retailer, returnPolicyID: long.id, warrantyMonths: 24)
+        model.applyRetailerChoice(retailer, selectedPolicies: [long, warranty])
 
         XCTAssertEqual(model.retailer, "JB Hi-Fi")
         XCTAssertEqual(model.selectedRetailerID, retailer.id)
@@ -327,23 +327,22 @@ final class ReceiptLibraryTests: XCTestCase {
         XCTAssertEqual(model.policyDrafts.first { $0.id == long.id }?.applies, true)
         let warrantyDraft = model.policyDrafts.first { $0.id == warranty.id }
         XCTAssertEqual(warrantyDraft?.applies, true)
-        XCTAssertEqual(warrantyDraft?.daysText, String(WarrantyLength.days(months: 24)))
+        XCTAssertEqual(warrantyDraft?.daysText, String(warranty.windowDays))
     }
 
-    func testChoosingNoReturnPolicyAndNoWarrantyAppliesNothingAndAWarrantyIsAddedWhenMissing() {
+    func testChoosingNoPoliciesAppliesNothingAndUnknownPoliciesAreNotAdded() {
         let short = SavedPolicy(kind: .returns, title: "Change of mind", windowDays: 30)
         let retailer = SavedRetailer(name: "Kmart", policies: [short])
         let model = ReceiptSaveViewModel(costs: ReceiptCostBreakdown(), pages: [])
 
-        model.applyRetailerChoice(retailer, returnPolicyID: nil, warrantyMonths: 0)
+        model.applyRetailerChoice(retailer, selectedPolicies: [])
         XCTAssertTrue(model.policyDrafts.allSatisfy { !$0.applies })
 
-        model.applyRetailerChoice(retailer, returnPolicyID: short.id, warrantyMonths: 6)
-        XCTAssertEqual(model.policyDrafts.count, 2)
-        let added = model.policyDrafts.first { $0.kind == .warranty }
-        XCTAssertEqual(added?.title, "Warranty")
-        XCTAssertEqual(added?.applies, true)
-        XCTAssertEqual(added?.daysText, String(WarrantyLength.days(months: 6)))
+        let unavailableWarranty = SavedPolicy(kind: .warranty, title: "Warranty", windowDays: WarrantyLength.days(months: 6))
+        model.applyRetailerChoice(retailer, selectedPolicies: [short, unavailableWarranty])
+        XCTAssertEqual(model.policyDrafts.count, 1)
+        XCTAssertEqual(model.policyDrafts.first { $0.id == short.id }?.applies, true)
+        XCTAssertNil(model.policyDrafts.first { $0.kind == .warranty })
     }
 
     func testImageStoreSavesLoadsAndDeletesPages() throws {

@@ -53,9 +53,17 @@ enum ReceiptExtractionMapper {
     )
 
     private static func containsAmount(_ value: Decimal, in text: String) -> Bool {
-        numericToken.matches(in: text, range: NSRange(text.startIndex..., in: text)).contains {
-            guard let range = Range($0.range, in: text) else { return false }
-            return ReceiptAmountParser.printed(String(text[range])) == value
+        let range = NSRange(text.startIndex..., in: text)
+        let money = ReceiptAmountParser.moneyRegex.matches(in: text, range: range)
+        if money.contains(where: { match in
+            Range(match.range(at: 1), in: text).flatMap { ReceiptAmountParser.printed(String(text[$0])) } == value
+        }) { return true }
+        // Quantity tokens are allowed independently, but never reinterpret the
+        // interior of a signed/currency amount with a different sign or scale.
+        return numericToken.matches(in: text, range: range).contains { match in
+            guard !money.contains(where: { NSIntersectionRange($0.range, match.range).length > 0 }),
+                  let token = Range(match.range, in: text) else { return false }
+            return ReceiptAmountParser.printed(String(text[token])) == value
         }
     }
 
@@ -74,6 +82,11 @@ enum ReceiptExtractionMapper {
         for index in (offset + 1)..<min(lines.count, offset + 4) {
             let next = lines[index]
             if evidenceKey(context).contains(target) {
+                // A printed price on the description row is already complete.
+                // Do not swallow following numeric identifiers or summary rows.
+                let lastRow = context.components(separatedBy: .newlines).last ?? context
+                let hasPrice = ReceiptAmountParser.moneyRegex.firstMatch(in: lastRow, range: NSRange(lastRow.startIndex..., in: lastRow)) != nil
+                if hasPrice && (index == offset + 1 || ReceiptProductEvidenceVerifier.printedQuantity(in: lastRow) == nil) { break }
                 guard isNumericContinuation(next) || next.range(of: #"^Page [0-9]+$"#, options: .regularExpression) != nil else { break }
             } else if !target.hasPrefix(evidenceKey(context)) { break }
             context += "\n" + next
@@ -87,15 +100,37 @@ enum ReceiptExtractionMapper {
         guard ReceiptOCRRowKind.classify(name) == .product else { return nil }
         func match(_ offset: Int) -> String? {
             guard chunk.lines.indices.contains(offset),
-                  ReceiptOCRRowKind.classify(chunk.lines[offset]) == .product else { return nil }
+                  ReceiptOCRRowKind.isProductRow(at: offset, lines: chunk.lines) else { return nil }
             return productContext(name: name, offset: offset, lines: chunk.lines)
         }
         let offset = sourceLine - chunk.startLine
+        if chunk.lines.indices.contains(offset),
+           evidenceKey(chunk.lines[offset]).contains(evidenceKey(name)),
+           !ReceiptOCRRowKind.isProductRow(at: offset, lines: chunk.lines) { return nil }
         if let context = match(offset) { return (offset, context) }
         let matches = chunk.lines.indices.compactMap { index -> (Int, String)? in
             match(index).map { (index, $0) }
         }
         return matches.count == 1 ? matches[0] : nil
+    }
+
+    /// Summary evidence stays non-product evidence during OCR gap filling.
+    static func summaryLines(_ generated: GeneratedReceiptCosts, chunk: ReceiptOCRChunk) -> Set<Int> {
+        let summaries = [generated.subtotal, generated.total, generated.tax,
+                         generated.discounts, generated.rounding].compactMap { $0 }
+            + generated.fees.map(\.amount)
+        return Set(chunk.lines.indices.compactMap { index in
+            var context = chunk.lines[index]
+            if index + 1 < chunk.lines.count, isNumericContinuation(chunk.lines[index + 1]) {
+                context += "\n" + chunk.lines[index + 1]
+            }
+            let matched = summaries.contains { summary in
+                guard let value = ReceiptAmountParser.printed(summary.printed) else { return false }
+                return !evidenceKey(summary.evidence).isEmpty &&
+                    evidenceKey(context).contains(evidenceKey(summary.evidence)) && containsAmount(value, in: context)
+            }
+            return matched ? chunk.startLine + index : nil
+        })
     }
 
     static func map(_ generated: GeneratedReceiptCosts, chunk: ReceiptOCRChunk) -> Mapped {
@@ -147,10 +182,17 @@ enum ReceiptExtractionMapper {
             }
             let context = anchor.context
             let singleQuantityAmount = ReceiptProductEvidenceVerifier.singlePrintedQuantityAmount(in: context)
+            let proposedLineCost = amount(item.lineTotal, evidence: context, label: "\(name) line cost", printedFallback: singleQuantityAmount)
+            let lineCost = proposedLineCost.flatMap {
+                ReceiptProductEvidenceVerifier.matchesPrintedLineCost($0, in: context) ? $0 : nil
+            }
+            if proposedLineCost != nil && lineCost == nil {
+                warnings.append("\(name): proposed price was not the printed line cost; review or retry required.")
+            }
             let product = ReceiptCostBreakdown.Product(name: name,
                 quantity: ReceiptProductEvidenceVerifier.printedQuantity(in: context) ?? amount(item.quantity, evidence: context, label: "\(name) quantity"),
                 unitPrice: singleQuantityAmount == nil ? amount(item.unitPrice, evidence: context, label: "\(name) unit price") : nil,
-                lineTotal: amount(item.lineTotal, evidence: context, label: "\(name) line cost", printedFallback: singleQuantityAmount),
+                lineTotal: lineCost,
                 discount: amount(item.discount, evidence: context, label: "\(name) discount").map { abs($0) },
                 isReturn: item.isReturn)
             products.append((chunk.startLine + anchor.offset, product))

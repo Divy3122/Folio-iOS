@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Receipt review stays deliberately simple:
-/// manual retailer/date, product names + prices, subtotal, the total-minus-subtotal
-/// adjustment, and the final total. The scanner's original evidence remains accessible.
+/// product names + prices, subtotal, printed tax/fees, and the final total.
+/// The scanner's original evidence remains accessible.
 struct ReceiptCostReviewView: View {
     @Bindable var viewModel: ReceiptScannerViewModel
     var isEditing = false
@@ -10,7 +10,7 @@ struct ReceiptCostReviewView: View {
     var body: some View {
         Form {
             // Exactly the two requested financial sections. Additional fees are
-            // calculated in this component as final total minus subtotal.
+            // copied from printed tax/fee components without balancing totals.
             ReceiptSimpleBreakdownSections(
                 review: $viewModel.review,
                 isEditing: isEditing

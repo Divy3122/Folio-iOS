@@ -1,3 +1,4 @@
+import Foundation
 import FoundationModels
 
 // Strings preserve printed decimal tokens: no binary floating-point prices enter the pipeline.
@@ -56,4 +57,37 @@ struct GeneratedReceiptCosts: Sendable {
     var taxTreatment: TaxTreatment
     @Guide(description: "Whether receipt-wide discounts are already reflected in final line costs or need deducting. Unknown unless explicitly supported.")
     var discountTreatment: DiscountTreatment
+}
+
+// Production requests only transcription fields. The existing mapped contract
+// stays compatible with focused retries, injected fixtures and shared domain data.
+@Generable
+struct GeneratedPrintedProduct {
+    var sourceLine: Int
+    @Guide(description: "Exact printed product description. Preserve abbreviations and repeated purchases.")
+    var name: String
+    var evidence: String
+    @Guide(description: "Exact printed final line-price token. Never multiply, divide or calculate. Nil only when absent or unreadable.")
+    var lineTotal: String?
+}
+
+@Generable
+struct GeneratedPrintedReceipt {
+    var products: [GeneratedPrintedProduct]
+    var subtotal: GeneratedReceiptAmount?
+    @Guide(description: "Printed tax amount, including tax already included in prices. Never calculate a tax amount or add it to the final total.")
+    var tax: GeneratedReceiptAmount?
+    @Guide(description: "Printed non-tax fees only, each once. Exclude included tax, payment amounts, discounts and combined summaries of fees already listed.")
+    var fees: [GeneratedReceiptFee]
+    var total: GeneratedReceiptAmount?
+
+    var costs: GeneratedReceiptCosts {
+        GeneratedReceiptCosts(products: products.map {
+            GeneratedReceiptProduct(sourceLine: $0.sourceLine, name: $0.name,
+                evidence: $0.evidence, quantity: nil, unitPrice: nil,
+                lineTotal: $0.lineTotal, discount: nil,
+                isReturn: $0.lineTotal.flatMap(ReceiptAmountParser.printed).map { $0 < 0 } ?? false)
+        }, subtotal: subtotal, discounts: nil, tax: tax, fees: fees,
+           rounding: nil, total: total, taxTreatment: .unknown, discountTreatment: .unknown)
+    }
 }

@@ -24,12 +24,10 @@ enum ReceiptSemanticTotalVerifier {
         var subtotal: Decimal?
         var tax: Decimal?
         var hasConflictingTotals: Bool = false
+        var sourceLines: Set<Int> = []
     }
 
-    private static let monetaryToken = try! NSRegularExpression(
-        pattern: #"(?<![\p{L}\p{N}])((?:(?:A\$|AUD|USD|NZD|EUR|GBP|CAD|CHF|[$£€¥])\s*)?[+-]?[0-9]{1,9}(?:[.,][0-9]{3})*[.,][0-9]{2})(?![\p{L}\p{N}])"#,
-        options: [.caseInsensitive]
-    )
+    private static let monetaryToken = ReceiptAmountParser.moneyRegex
 
     private static func amounts(in line: String) -> [Decimal] {
         let range = NSRange(line.startIndex..<line.endIndex, in: line)
@@ -61,6 +59,7 @@ enum ReceiptSemanticTotalVerifier {
         var totalValues: [Decimal] = []
         var subtotalValues: [Decimal] = []
         var taxValues: [Decimal] = []
+        var sourceLines = Set<Int>()
 
         for proposal in proposals {
             var offset = proposal.sourceLine - 1
@@ -87,9 +86,9 @@ enum ReceiptSemanticTotalVerifier {
             guard matched else { continue }
 
             switch proposal.role {
-            case .finalTotal: totalValues.append(proposed)
-            case .subtotal: subtotalValues.append(proposed)
-            case .tax: taxValues.append(proposed)
+            case .finalTotal: totalValues.append(proposed); sourceLines.insert(offset + 1)
+            case .subtotal: subtotalValues.append(proposed); sourceLines.insert(offset + 1)
+            case .tax: taxValues.append(proposed); sourceLines.insert(offset + 1)
             case .other: break
             }
         }
@@ -102,7 +101,7 @@ enum ReceiptSemanticTotalVerifier {
             total: singleValue(totalValues),
             subtotal: singleValue(subtotalValues),
             tax: singleValue(taxValues),
-            hasConflictingTotals: Set(totalValues).count > 1
+            hasConflictingTotals: Set(totalValues).count > 1, sourceLines: sourceLines
         )
     }
 

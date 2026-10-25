@@ -75,14 +75,17 @@ actor FoundationModelsReceiptExtractor: ReceiptEvidenceExtracting {
             it to guess a unit price. Include explicit returns with their printed signs.
             Exclude category headings, VAT/GST summaries, payment methods, tender,
             change, authorisation codes, loyalty data and transaction metadata.
+            Store names, addresses, websites and thank-you/footer text are not products.
 
             For each proposed item, report the exact source line number and an OCR
             evidence excerpt without the line-number prefix. The excerpt must
             contain the product description; include the amount when it is nearby.
             Quote exact printed numeric tokens as evidence. Do not repair OCR text.
-            Distinguish subtotal, additional tax, included tax, discounts, fees,
-            rounding and final total. A printed total is authoritative, not the
-            arithmetic sum of products. Leave ambiguous tax treatment unknown.
+            Copy the printed subtotal, final total, tax amount and additional fees.
+            Tax and fees are information to transcribe, not values to reconcile.
+            Do not perform arithmetic, infer adjustments, classify tax treatment,
+            or compare product sums with totals. Never reject a printed amount
+            because other receipt amounts do not match it.
             """)
 
         let response = try await session.respond(
@@ -91,13 +94,13 @@ actor FoundationModelsReceiptExtractor: ReceiptEvidenceExtracting {
                 totals from the following OCR with global line numbers:
                 \(text)
                 """,
-            generating: GeneratedReceiptCosts.self,
+            generating: GeneratedPrintedReceipt.self,
             options: GenerationOptions(
                 sampling: .greedy,
                 maximumResponseTokens: 1800
             )
         )
-        return response.content
+        return response.content.costs
     }
 
     func extract(text: String) async throws -> ReceiptExtractionResult {
@@ -112,7 +115,7 @@ actor FoundationModelsReceiptExtractor: ReceiptEvidenceExtracting {
         // OCR remains useful even when Foundation Models is unavailable.
         if let reason = unavailableReason() {
             trace("MODEL UNAVAILABLE | \(reason)")
-            return VerifiedReceiptOCRRecovery.recoverIfComplete(
+            return VerifiedReceiptOCRRecovery.recoverPrintedFields(
                 ReceiptExtractionMapper.combine([], rawText: text, warnings: [reason]),
                 from: text
             )
@@ -121,6 +124,7 @@ actor FoundationModelsReceiptExtractor: ReceiptEvidenceExtracting {
         var parts: [ReceiptExtractionMapper.Mapped] = []
         var warnings: [String] = []
         var focusedAttempts = 0
+        var summaryLines = Set<Int>()
 
         for chunk in ReceiptOCRChunk.split(text) {
             try Task.checkCancellation()
@@ -132,6 +136,7 @@ actor FoundationModelsReceiptExtractor: ReceiptEvidenceExtracting {
                 for item in generated.products.prefix(20) {
                     trace("AI PRODUCT | line \(item.sourceLine) | \(item.name) | price \(item.lineTotal ?? "nil") | evidence: \(String(item.evidence.prefix(130)))")
                 }
+                summaryLines.formUnion(ReceiptExtractionMapper.summaryLines(generated, chunk: chunk))
                 var mapped = ReceiptExtractionMapper.map(generated, chunk: chunk)
                 trace("MAPPER CHUNK \(chunk.startLine) | products: \(mapped.costs.products.count) | total: \(mapped.costs.total.map { String(describing: $0) } ?? "nil")")
                 for item in mapped.costs.products.prefix(20) {
@@ -216,6 +221,7 @@ actor FoundationModelsReceiptExtractor: ReceiptEvidenceExtracting {
                 let verified = ReceiptSemanticTotalVerifier.verify(
                     proposals, against: text
                 )
+                summaryLines.formUnion(verified.sourceLines)
                 result = ReceiptSemanticTotalVerifier.apply(verified, to: result)
                 trace("SEMANTIC TOTAL RETRY | \(proposals.count) proposals | total: \(result.costBreakdown?.total.map { String(describing: $0) } ?? "nil")")
             } catch is CancellationError {
@@ -229,8 +235,8 @@ actor FoundationModelsReceiptExtractor: ReceiptEvidenceExtracting {
         // Conservative non-AI recovery remains available for genuinely
         // unsupported devices and incomplete recognitions. The primary
         // model-led path above is independent of receipt-specific labels.
-        let recovered = VerifiedReceiptOCRRecovery.recoverIfComplete(
-            result, from: text
+        let recovered = VerifiedReceiptOCRRecovery.recoverPrintedFields(
+            result, from: text, excludedLines: summaryLines
         )
         trace("FINAL EXTRACTION | products: \(recovered.costBreakdown?.products.count ?? 0) | total: \(recovered.costBreakdown?.total.map { String(describing: $0) } ?? "nil") | warnings: \(recovered.reviewWarnings.count)")
         return recovered

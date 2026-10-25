@@ -454,7 +454,7 @@ extension ReceiptExtractionTests {
         #expect(model.review.products.map(\.name) == ["Rainbow Roll", "Spider Roll", "750ml Hakutsuru"])
         #expect(model.review.products.map(\.lineTotal) == ["15.95", "14.95", "39.95"])
         #expect(model.review.subtotal == "70.85")
-        #expect(model.review.tax == "5.31")
+        #expect(model.review.fees == "5.31")
         #expect(model.review.total == "76.16")
         #expect(model.extractionWarnings.isEmpty)
         #expect(ReceiptCostValidator.warnings(for: model.review).isEmpty)
@@ -544,7 +544,7 @@ extension ReceiptExtractionTests {
         #expect(model.review.products[4].quantity == "2")
         #expect(model.review.products[0].unitPrice.isEmpty)
         #expect(model.review.subtotal == "66.2")
-        #expect(model.review.tax == "13.24")
+        #expect(model.review.fees == "13.24")
         #expect(model.review.total == "79.44")
     }
 
@@ -601,8 +601,102 @@ extension ReceiptExtractionTests {
         #expect(Set(model.review.products.map(\.name)).count == 80)
         #expect(model.review.products.allSatisfy { $0.lineTotal == "2" })
         #expect(model.review.total == "999")
-        #expect(model.review.tax == "1")
+        #expect(model.review.fees == "1")
         #expect(model.originalPages.count == 2)
         #expect(!ReceiptCostValidator.warnings(for: model.review).isEmpty)
+    }
+}
+
+extension ReceiptExtractionTests {
+    @Test @MainActor func omittedProductRecoveredByTargetedRetry() async {
+        let text = """
+        STARTERS
+        Garlic Bread x2 €7,80
+        Crispy Calamari €6,50
+        MAINS
+        Pan-Seared Salmon €17,90
+        Ribeye Steak €21,50
+        DRINKS
+        House Red x2 €11,00
+        Still Water €1,50
+        Subtotal 66,20
+        VAT 13,24
+        Total 79,44
+        PAYMENT TYPE VISA
+        APP# 11278860
+        """
+        var initial = generated([
+            product("Garlic Bread", 3, "Garlic Bread", quantity: "2", cost: "7.80"),
+            product("Crispy Calamari", 4, "Crispy Calamari", cost: "6.50"),
+            product("Pan-Seared Salmon", 6, "Pan-Seared Salmon", cost: "17.90"),
+            product("House Red", 9, "House Red", quantity: "2", cost: "11.00"),
+            product("Still Water", 10, "Still Water", cost: "1.50")
+        ], total: amount("79.44", "Total 79.44"))
+        initial.subtotal = amount("66.20", "Subtotal 66.20")
+        initial.tax = amount("13.24", "VAT 13.24")
+        initial.taxTreatment = .added
+        let fixture = initial
+        let extractor = FoundationModelsReceiptExtractor(unavailableReason: { nil }, generate: { _ in fixture },
+            generateFocused: { input in
+                #expect(input.contains("7: Ribeye Steak"))
+                #expect(!input.contains("Garlic Bread"))
+                #expect(!input.contains("Still Water"))
+                #expect(!input.contains("PAYMENT TYPE"))
+                var proposals = Array(repeating: FocusedReceiptProductProposal(sourceLine: 7, name: "Ribeye Steak", quantity: nil, lineTotal: "21,50", evidence: "Ribeye Steak €21,50"), count: 9)
+                proposals += [
+                    .init(sourceLine: 3, name: "Garlic Bread", quantity: nil, lineTotal: "7.80", evidence: "Garlic Bread"),
+                    .init(sourceLine: 13, name: "Total", quantity: nil, lineTotal: "79.44", evidence: "Total"),
+                    .init(sourceLine: 15, name: "APP#", quantity: nil, lineTotal: "11278860", evidence: "APP#")
+                ]
+                return proposals
+            })
+        let model = ReceiptScannerViewModel(recognizer: FixtureRecognizer(), extractor: extractor, draftStore: nil)
+        await model.process(pages: [Data(text.utf8)])
+        #expect(model.review.products.map(\.name) == ["Garlic Bread", "Crispy Calamari", "Pan-Seared Salmon", "Ribeye Steak", "House Red", "Still Water"])
+        #expect(model.review.products.map(\.lineTotal) == ["7.8", "6.5", "17.9", "21.5", "11", "1.5"])
+        #expect(model.review.subtotal == "66.2")
+        #expect(model.review.fees == "13.24")
+        #expect(model.review.total == "79.44")
+        let trace = await extractor.debugSnapshot()
+        #expect(trace.contains { $0.contains("Accepted Ribeye Steak") })
+        #expect(trace.contains { $0.contains("Rejected APP#") })
+    }
+
+    @Test @MainActor func focusedRecoverySupportsWrappedAndRepeatedMultipageProducts() async {
+        let first = "Tea €2,00\nTea €2,00\nRoasted\nVegetable Tart\nEUR 8,25"
+        let second = "Tea €2,00\nTOTAL €14,25"
+        let fixture = generated([product("Tea", 2, "Tea €2,00", cost: "2.00")], total: amount("14.25", "TOTAL 14.25"))
+        let extractor = FoundationModelsReceiptExtractor(unavailableReason: { nil }, generate: { _ in fixture },
+            generateFocused: { input in
+                #expect(!input.components(separatedBy: .newlines).contains("2: Tea €2,00"))
+                #expect(input.contains("3: Tea €2,00"))
+                return [
+                    .init(sourceLine: 6, name: "EUR", quantity: nil, lineTotal: "8.25", evidence: "EUR 8,25"),
+                    .init(sourceLine: 3, name: "Tea", quantity: nil, lineTotal: "2.00", evidence: "Tea"),
+                    .init(sourceLine: 4, name: "Roasted Vegetable Tart", quantity: nil, lineTotal: "8.25", evidence: "Roasted Vegetable Tart EUR 8,25"),
+                    .init(sourceLine: 9, name: "Tea", quantity: nil, lineTotal: "2.00", evidence: "Tea")
+                ]
+            })
+        let model = ReceiptScannerViewModel(recognizer: FixtureRecognizer(), extractor: extractor, draftStore: nil)
+        await model.process(pages: [Data(first.utf8), Data(second.utf8)])
+        #expect(model.review.products.map(\.name) == ["Tea", "Tea", "Roasted Vegetable Tart", "Tea"])
+        #expect(model.review.products.map(\.lineTotal) == ["2", "2", "8.25", "2"])
+        #expect(model.review.total == "14.25")
+        #expect(model.originalPages.count == 2)
+    }
+
+    @Test @MainActor func mismatchDoesNotTriggerProductInvention() async {
+        let text = "Soup 4.00\nTOTAL 40.00\nPAYMENT TYPE CARD\nREF# 12345"
+        let fixture = generated([product("Soup", 2, "Soup", cost: "4.00")], total: amount("40.00", "TOTAL 40.00"))
+        let extractor = FoundationModelsReceiptExtractor(unavailableReason: { nil }, generate: { _ in fixture },
+            generateFocused: { _ in
+                Issue.record("Arithmetic mismatch must not trigger focused extraction")
+                return [.init(sourceLine: 3, name: "Invented product", quantity: nil, lineTotal: "36.00", evidence: "")]
+            })
+        let model = ReceiptScannerViewModel(recognizer: FixtureRecognizer(), extractor: extractor, draftStore: nil)
+        await model.process(pages: [Data(text.utf8)])
+        #expect(model.review.products.map(\.name) == ["Soup"])
+        #expect(model.review.products.first?.lineTotal == "4")
+        #expect(model.review.total == "40")
     }
 }

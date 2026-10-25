@@ -284,16 +284,17 @@ final class ReceiptScannerViewModel {
                 return
             }
             // Retain the existing product extraction, but ignore AI-generated
-            // subtotal/tax/discount/fee interpretations. Read only the explicitly
-            // printed subtotal and final total from OCR. The UI calculates the
-            // single adjustment row as final total minus subtotal.
+            // financial arithmetic. Preserve copied totals and printed charges.
             var draft: ReceiptReviewDraft
             if let costs = result.costBreakdown {
                 draft = ReceiptReviewDraft(costs)
             } else {
                 draft = ReceiptReviewDraft()
             }
-            ReceiptSimpleTotals.simplify(&draft, ocrText: extractedText)
+            let conflictingTotals = result.reviewWarnings.contains {
+                $0.localizedCaseInsensitiveContains("conflicting") && $0.localizedCaseInsensitiveContains("total")
+            }
+            ReceiptSimpleTotals.simplify(&draft, ocrText: extractedText, allowTotalFallback: !conflictingTotals)
             let audit = ReceiptScanQualityAudit.inspect(
                 text: extractedText, pages: ocrEvidencePages, expectedPageCount: pageCount
             )
@@ -302,7 +303,7 @@ final class ReceiptScannerViewModel {
             apply(draft)
             #if DEBUG
             let simpleAmounts = ReceiptSimpleTotals.read(ocrText: extractedText)
-            pipelineDebugReport += "\nSIMPLE TOTALS | printed subtotal: \(simpleAmounts.subtotal.map { String(describing: $0) } ?? "missing") | printed total: \(simpleAmounts.total.map { String(describing: $0) } ?? "missing") | additional fees/adjustments: \(simpleAmounts.additionalFees.map { String(describing: $0) } ?? "missing")"
+            pipelineDebugReport += "\nSIMPLE TOTALS | printed subtotal: \(simpleAmounts.subtotal.map { String(describing: $0) } ?? "missing") | printed total: \(simpleAmounts.total.map { String(describing: $0) } ?? "missing") | printed tax/fees: \(simpleAmounts.additionalFees.map { String(describing: $0) } ?? "missing")"
             pipelineDebugReport += "\nREVIEW STATE | products: \(review.products.count) | subtotal: \(review.subtotal.isEmpty ? "EMPTY" : review.subtotal) | final total: \(review.total.isEmpty ? "EMPTY" : review.total)"
             #endif
         } catch is CancellationError {

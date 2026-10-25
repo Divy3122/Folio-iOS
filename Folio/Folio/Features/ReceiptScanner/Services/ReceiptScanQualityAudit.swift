@@ -15,24 +15,11 @@ enum ReceiptScanQualityAudit {
             result.warnings.append("Some pages have no OCR evidence. Check their original images.")
         }
 
-        // Read each candidate row independently to spot disagreements that the
-        // simple totals reader otherwise resolves by precedence/order.
-        var subtotals: Set<Decimal> = []
-        var totals: Set<Decimal> = []
-        let lines = text.components(separatedBy: .newlines)
-        for i in lines.indices {
-            let line = lines[i].trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.range(of: #"(?i)^sub[\s-]*total\b"#, options: .regularExpression) != nil {
-                let sample = line + (i + 1 < lines.count ? "\n" + lines[i + 1] : "")
-                if let amount = ReceiptSimpleTotals.read(ocrText: line).subtotal ?? ReceiptSimpleTotals.read(ocrText: sample).subtotal { subtotals.insert(amount) }
-            }
-            if line.range(of: #"(?i)^(?:(?:grand|final)\s+total|total(?:\s+(?:amount\s+paid|paid|due))?|amount\s+(?:paid|due)|balance\s+due)\b"#, options: .regularExpression) != nil {
-                let sample = line + (i + 1 < lines.count ? "\n" + lines[i + 1] : "")
-                if let amount = ReceiptSimpleTotals.read(ocrText: line).total ?? ReceiptSimpleTotals.read(ocrText: sample).total { totals.insert(amount) }
-            }
-        }
-        result.ambiguousSubtotal = subtotals.count > 1
-        result.ambiguousTotal = totals.count > 1
+        // Use the same receipt-wide parser as extraction and review so the
+        // audit cannot independently select a different printed amount.
+        let printed = ReceiptSimpleTotals.read(ocrText: text)
+        result.ambiguousSubtotal = printed.hasConflictingSubtotals
+        result.ambiguousTotal = printed.hasConflictingTotals
         if result.ambiguousSubtotal {
             result.warnings.append("Conflicting printed subtotals detected. Verify the subtotal against the receipt.")
         }
