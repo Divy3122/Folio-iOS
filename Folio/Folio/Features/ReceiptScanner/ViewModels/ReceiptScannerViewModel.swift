@@ -134,6 +134,8 @@ final class ReceiptScannerViewModel {
             scheduleSave()
         }
     }
+    
+
 
     private var hasDraftSession = false
 
@@ -371,6 +373,31 @@ final class ReceiptScannerViewModel {
             try await draftStore.save(snapshot)
             storageWarning = nil
         } catch { storageWarning = "This review could not be saved locally. Keep it open and try again." }
+    }
+    
+    /// Called once a receipt is saved to the library. Wipes the draft from memory AND disk.
+    func clearDraft() async {
+        // Stop anything that could write the draft back.
+        saveTask?.cancel()
+        scanTask?.cancel()
+
+        // Reset in-memory state (same fields beginManualReceipt/process touch).
+        resetCompany()
+        editRevision += 1
+        originalPages = []
+        ocrEvidencePages = []
+        pageCount = 0
+        extractedText = ""
+        errorMessage = nil
+        extractionWarnings = []
+        storageWarning = nil
+        pipelineDebugReport = "No new scan has been processed in this session."
+        apply(ReceiptReviewDraft())      // apply() so review's didSet doesn't mark a new draft
+        hasDraftSession = false          // hasReview is now false
+
+        // Remove the persisted draft so restoreDraft() can't bring it back.
+        do { try await draftStore?.clear() }
+        catch { storageWarning = "The saved draft could not be removed. It may reappear next time." }
     }
 
     func reportError(_ error: Error) { errorMessage = error.localizedDescription }

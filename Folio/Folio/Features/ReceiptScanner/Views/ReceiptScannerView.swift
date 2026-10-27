@@ -17,10 +17,11 @@ struct ReceiptScannerView: View {
     @State private var isEditing = false
     @State private var confirmingReplacement = false
     @State private var pendingMode: EntryMode = .scan
-
+    @State private var pendingSharedBatch: URL?
     @State private var showingPhotoPicker = false
     @State private var photoSelection: [PhotosPickerItem] = []
     @State private var isImportingPhotos = false
+    @State private var didSaveReceipt = false
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -180,9 +181,30 @@ struct ReceiptScannerView: View {
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                 }
             }
-            .task { await viewModel.restoreDraft() }
+            .task {
+                await viewModel.restoreDraft()
+                checkSharedInbox()
+            }
             .onChange(of: scenePhase) { _, phase in
-                if phase != .active { Task { await viewModel.saveDraft() } }
+                if phase == .active { checkSharedInbox() }
+                else { Task { await viewModel.saveDraft() } }
+            }
+            .confirmationDialog(
+                "Receipt shared from another app",
+                isPresented: Binding(
+                    get: { pendingSharedBatch != nil },
+                    set: { if !$0 { pendingSharedBatch = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Replace draft and review", role: .destructive) {
+                    if let batch = pendingSharedBatch { consumeSharedBatch(batch) }
+                }
+                Button("Discard shared receipt", role: .destructive) {
+                    if let batch = pendingSharedBatch { SharedReceiptInbox.remove(batch) }
+                }
+            } message: {
+                Text("You have an unsaved receipt draft. Cancel to decide later.")
             }
             .onDisappear { Task { await viewModel.saveDraft() } }
         }
@@ -239,8 +261,20 @@ struct ReceiptScannerView: View {
                 .background(.bar)
             }
         }
-        .sheet(isPresented: $showingSave) {
-            ReceiptSaveSheet(costs: viewModel.review.costs, pages: viewModel.originalPages)
+        .sheet(isPresented: $showingSave, onDismiss: {
+            if didSaveReceipt {
+                didSaveReceipt = false
+                showingResults = false          // back to the scan screen once the sheet is gone
+            }
+        }) {
+            ReceiptSaveSheet(
+                costs: viewModel.review.costs,
+                pages: viewModel.originalPages,
+                onSaved: {
+                    didSaveReceipt = true
+                    Task { await viewModel.clearDraft() }   // removes the draft from memory and disk
+                }
+            )
         }
     }
 
@@ -252,6 +286,24 @@ struct ReceiptScannerView: View {
         case .photos: "Import a new receipt"
         case .scan: "Scan a new receipt"
         }
+    }
+    
+    private func checkSharedInbox() {
+        guard !isImportingPhotos, pendingSharedBatch == nil,
+              let batch = SharedReceiptInbox.pendingBatches().first else { return }
+        if viewModel.hasReview { pendingSharedBatch = batch }
+        else { consumeSharedBatch(batch) }
+    }
+
+    private func consumeSharedBatch(_ batch: URL) {
+        let pages = SharedReceiptInbox.pages(in: batch)
+        SharedReceiptInbox.remove(batch)
+        pendingSharedBatch = nil
+        guard !pages.isEmpty else {
+            viewModel.reportError(ScannerError.imageConversionFailed)
+            return
+        }
+        startReview(with: pages)   // same OCR + Apple Intelligence pipeline as the camera
     }
 
     private func requestEntry(_ mode: EntryMode) {

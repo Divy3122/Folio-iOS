@@ -348,10 +348,16 @@ final class ReceiptSaveViewModel {
 struct ReceiptSaveSheet: View {
     @State private var model: ReceiptSaveViewModel
     @State private var showingRetailers = false
+    var onSaved: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
 
-    init(costs: ReceiptCostBreakdown, pages: [Data], source: ReceiptMetadata.ExtractionSource? = nil, existingRecord: ReceiptRecord? = nil) {
+    init(costs: ReceiptCostBreakdown,
+         pages: [Data],
+         source: ReceiptMetadata.ExtractionSource? = nil,
+         existingRecord: ReceiptRecord? = nil,
+         onSaved: @escaping () -> Void = {}) {
         _model = State(initialValue: ReceiptSaveViewModel(costs: costs, pages: pages, source: source, existingRecord: existingRecord))
+        self.onSaved = onSaved
     }
 
     var body: some View {
@@ -474,7 +480,10 @@ struct ReceiptSaveSheet: View {
                 Section {
                     Text("The receipt was saved, but its scan details or metadata were not. \(message)")
                     Button("Try again") { Task { await model.retryAttach() } }
-                    Button("Close without scan details") { dismiss() }
+                    Button("Close without scan details") {
+                        onSaved()
+                        dismiss()
+                    }
                 }
             }
         }

@@ -6,7 +6,18 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		1EB0BD433090942300DB4881 /* FolioShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 1EB0BD393090942300DB4881 /* FolioShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
+		1EB0BD413090942300DB4881 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 45BFDF2F307F97BB00F10621 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1EB0BD383090942300DB4881;
+			remoteInfo = FolioShare;
+		};
 		45BFDF45307F97BD00F10621 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 45BFDF2F307F97BB00F10621 /* Project object */;
@@ -23,7 +34,22 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		1EB0BD483090942300DB4881 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				1EB0BD433090942300DB4881 /* FolioShare.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		1EB0BD393090942300DB4881 /* FolioShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = FolioShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		45BFDF37307F97BB00F10621 /* Folio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Folio.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		45BFDF44307F97BD00F10621 /* FolioTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FolioTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		45BFDF4E307F97BD00F10621 /* FolioUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FolioUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -37,9 +63,33 @@
 			);
 			target = 45BFDF36307F97BB00F10621 /* Folio */;
 		};
+		1EB0BD4F30909FAD00DB4881 /* Exceptions for "FolioShare" folder in "Folio" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				SharedReceiptInbox.swift,
+				ShareViewController.swift,
+			);
+			target = 45BFDF36307F97BB00F10621 /* Folio */;
+		};
+		1EB0BD583090A22600DB4881 /* Exceptions for "FolioShare" folder in "FolioShare" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 1EB0BD383090942300DB4881 /* FolioShare */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		1EB0BD3A3090942300DB4881 /* FolioShare */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				1EB0BD4F30909FAD00DB4881 /* Exceptions for "FolioShare" folder in "Folio" target */,
+				1EB0BD583090A22600DB4881 /* Exceptions for "FolioShare" folder in "FolioShare" target */,
+			);
+			path = FolioShare;
+			sourceTree = "<group>";
+		};
 		45BFDF39307F97BB00F10621 /* Folio */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -61,6 +111,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		1EB0BD363090942300DB4881 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		45BFDF34307F97BB00F10621 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -91,6 +148,7 @@
 				45BFDF39307F97BB00F10621 /* Folio */,
 				45BFDF47307F97BD00F10621 /* FolioTests */,
 				45BFDF51307F97BD00F10621 /* FolioUITests */,
+				1EB0BD3A3090942300DB4881 /* FolioShare */,
 				45BFDF38307F97BB00F10621 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -101,6 +159,7 @@
 				45BFDF37307F97BB00F10621 /* Folio.app */,
 				45BFDF44307F97BD00F10621 /* FolioTests.xctest */,
 				45BFDF4E307F97BD00F10621 /* FolioUITests.xctest */,
+				1EB0BD393090942300DB4881 /* FolioShare.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -108,6 +167,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		1EB0BD383090942300DB4881 /* FolioShare */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1EB0BD443090942300DB4881 /* Build configuration list for PBXNativeTarget "FolioShare" */;
+			buildPhases = (
+				1EB0BD353090942300DB4881 /* Sources */,
+				1EB0BD363090942300DB4881 /* Frameworks */,
+				1EB0BD373090942300DB4881 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				1EB0BD3A3090942300DB4881 /* FolioShare */,
+			);
+			name = FolioShare;
+			packageProductDependencies = (
+			);
+			productName = FolioShare;
+			productReference = 1EB0BD393090942300DB4881 /* FolioShare.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		45BFDF36307F97BB00F10621 /* Folio */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 45BFDF58307F97BD00F10621 /* Build configuration list for PBXNativeTarget "Folio" */;
@@ -115,10 +196,12 @@
 				45BFDF33307F97BB00F10621 /* Sources */,
 				45BFDF34307F97BB00F10621 /* Frameworks */,
 				45BFDF35307F97BB00F10621 /* Resources */,
+				1EB0BD483090942300DB4881 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				1EB0BD423090942300DB4881 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				45BFDF39307F97BB00F10621 /* Folio */,
@@ -183,9 +266,13 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2620;
+				LastSwiftUpdateCheck = 2710;
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
+					1EB0BD383090942300DB4881 = {
+						CreatedOnToolsVersion = 27.1;
+						LastSwiftMigration = 2710;
+					};
 					45BFDF36307F97BB00F10621 = {
 						CreatedOnToolsVersion = 26.2;
 					};
@@ -216,11 +303,19 @@
 				45BFDF36307F97BB00F10621 /* Folio */,
 				45BFDF43307F97BD00F10621 /* FolioTests */,
 				45BFDF4D307F97BD00F10621 /* FolioUITests */,
+				1EB0BD383090942300DB4881 /* FolioShare */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		1EB0BD373090942300DB4881 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		45BFDF35307F97BB00F10621 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -245,6 +340,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		1EB0BD353090942300DB4881 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		45BFDF33307F97BB00F10621 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -269,6 +371,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		1EB0BD423090942300DB4881 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1EB0BD383090942300DB4881 /* FolioShare */;
+			targetProxy = 1EB0BD413090942300DB4881 /* PBXContainerItemProxy */;
+		};
 		45BFDF46307F97BD00F10621 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 45BFDF36307F97BB00F10621 /* Folio */;
@@ -282,6 +389,75 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		1EB0BD453090942300DB4881 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = FolioShare/FolioShare.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2L84BBH42V;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = FolioShare/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = FolioShare;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = uts.edu.Folio.FolioShare;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		1EB0BD463090942300DB4881 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = FolioShare/FolioShare.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2L84BBH42V;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = FolioShare/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = FolioShare;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = uts.edu.Folio.FolioShare;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		45BFDF56307F97BD00F10621 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -408,6 +584,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Folio/Folio.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -429,6 +606,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = uts.edu.Folio;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
+				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -444,6 +622,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Folio/Folio.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -465,6 +644,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = uts.edu.Folio;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
+				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -566,6 +746,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		1EB0BD443090942300DB4881 /* Build configuration list for PBXNativeTarget "FolioShare" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1EB0BD453090942300DB4881 /* Debug */,
+				1EB0BD463090942300DB4881 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		45BFDF32307F97BB00F10621 /* Build configuration list for PBXProject "Folio" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

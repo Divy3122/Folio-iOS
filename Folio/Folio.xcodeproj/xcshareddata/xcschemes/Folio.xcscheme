@@ -38,6 +38,16 @@
                ReferencedContainer = "container:Folio.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "45BFDF4D307F97BD00F10621"
+               BuildableName = "FolioUITests.xctest"
+               ReferencedContainer = "container:Folio.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
