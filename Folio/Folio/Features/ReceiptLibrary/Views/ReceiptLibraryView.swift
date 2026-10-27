@@ -57,7 +57,6 @@ struct ReceiptLibraryView: View {
                     Text("This action cannot be undone.")
                 }
                 .task(id: model.query) { await model.reload() }
-                .task { await seedSamplesOnce() }
         }
     }
 
@@ -187,14 +186,7 @@ struct ReceiptLibraryView: View {
                     Text(sort.title).tag(sort)
                 }
             }
-            #if DEBUG
-            Button("Add sample receipts") {
-                Task {
-                    _ = try? await ReceiptLibrarySampleData.seed(into: services)
-                    await model.reload()
-                }
-            }
-            #endif
+        
         } label: {
             Label("Filter and sort", systemImage: "line.3.horizontal.decrease.circle")
         }
@@ -229,15 +221,6 @@ struct ReceiptLibraryView: View {
         await model.reload()
     }
     
-    private func seedSamplesOnce() async {
-        #if DEBUG
-        let key = "ReceiptLibrarySamplesSeeded"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
-        _ = try? await ReceiptLibrarySampleData.seed(into: services)
-        UserDefaults.standard.set(true, forKey: key)
-        await model.reload()
-        #endif
-    }
 }
 
 // MARK: - Button Style
