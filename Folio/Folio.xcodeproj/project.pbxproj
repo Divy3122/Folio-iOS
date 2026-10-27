@@ -29,9 +29,22 @@
 		45BFDF4E307F97BD00F10621 /* FolioUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FolioUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		1EB0BD3430908F3A00DB4881 /* Exceptions for "Folio" folder in "Folio" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 45BFDF36307F97BB00F10621 /* Folio */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		45BFDF39307F97BB00F10621 /* Folio */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				1EB0BD3430908F3A00DB4881 /* Exceptions for "Folio" folder in "Folio" target */,
+			);
 			path = Folio;
 			sourceTree = "<group>";
 		};
@@ -401,6 +414,7 @@
 				DEVELOPMENT_TEAM = 2L84BBH42V;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Folio/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Folio uses the camera to scan receipts for your review.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -436,6 +450,7 @@
 				DEVELOPMENT_TEAM = 2L84BBH42V;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Folio/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Folio uses the camera to scan receipts for your review.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
