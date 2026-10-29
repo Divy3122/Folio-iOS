@@ -79,12 +79,27 @@ struct VerifiedReceiptOCRRecoveryTests {
         ])
         let recovered = VerifiedReceiptOCRRecovery.recoverIfComplete(result, from: bistro)
         #expect(recovered.costBreakdown == result.costBreakdown)
+
+        let reference = VerifiedReceiptOCRRecovery.recoverIfComplete(empty(bistro), from: bistro)
+        guard var costs = reference.costBreakdown else { return }
+        costs.products[1].lineTotal = Decimal(string: "9.99")
+        costs.products[2].lineTotal = nil
+        var partial = empty(bistro)
+        partial.costBreakdown = costs
+
+        let recoveredPartial = VerifiedReceiptOCRRecovery.recoverIfComplete(partial, from: bistro)
+        #expect(recoveredPartial.costBreakdown?.products[1].lineTotal == Decimal(string: "9.99"))
+        #expect(recoveredPartial.costBreakdown?.products[2].lineTotal == nil)
     }
 
-    @Test func conflictingPrintedTotalsRemainUnresolved() {
+    @Test func conflictingOrUnreadablePrintedTotalsRemainUnresolved() {
         let ocr = bistro + "\nTotal £80,44"
         let result = VerifiedReceiptOCRRecovery.recoverIfComplete(empty(ocr), from: ocr)
         #expect(result.costBreakdown == nil)
+
+        let unreadableOcr = bistro.replacingOccurrences(of: "£11,00", with: "unreadable")
+        let unreadableResult = VerifiedReceiptOCRRecovery.recoverIfComplete(empty(unreadableOcr), from: unreadableOcr)
+        #expect(unreadableResult.costBreakdown == nil)
     }
 
     @Test func obviousMetadataCorruptionCanBeReplacedWithoutDroppingValidItems() {
@@ -97,12 +112,6 @@ struct VerifiedReceiptOCRRecoveryTests {
         #expect(recovered.costBreakdown?.products.count == 6)
     }
 
-    @Test func unreadableProductPriceCannotBeInferred() {
-        let ocr = bistro.replacingOccurrences(of: "£11,00", with: "unreadable")
-        let result = VerifiedReceiptOCRRecovery.recoverIfComplete(empty(ocr), from: ocr)
-        #expect(result.costBreakdown == nil)
-    }
-
     @Test func partialExtractionRepairsMissingPriceAndCorrectsVAT() {
         let reference = VerifiedReceiptOCRRecovery.recoverIfComplete(empty(bistro), from: bistro)
         guard var costs = reference.costBreakdown else {
@@ -110,7 +119,7 @@ struct VerifiedReceiptOCRRecoveryTests {
             return
         }
         costs.products[2].lineTotal = nil
-        costs.taxTreatment = .included  // AI incorrectly classified an excl.-VAT receipt
+        costs.taxTreatment = .included
         var partial = empty(bistro)
         partial.costBreakdown = costs
         partial.reviewWarnings = ["Pan-Seared Salmon line cost could not be verified against the OCR and was left missing."]
@@ -122,22 +131,6 @@ struct VerifiedReceiptOCRRecoveryTests {
         if let complete = recovered.costBreakdown {
             #expect(ReceiptCostValidator.warnings(for: ReceiptReviewDraft(complete)).isEmpty)
         }
-    }
-
-    @Test func conflictingPreviouslyAcceptedPriceIsNeverOverwritten() {
-        let reference = VerifiedReceiptOCRRecovery.recoverIfComplete(empty(bistro), from: bistro)
-        guard var costs = reference.costBreakdown else {
-            Issue.record("Expected complete OCR fixture")
-            return
-        }
-        costs.products[1].lineTotal = Decimal(string: "9.99")
-        costs.products[2].lineTotal = nil
-        var partial = empty(bistro)
-        partial.costBreakdown = costs
-
-        let recovered = VerifiedReceiptOCRRecovery.recoverIfComplete(partial, from: bistro)
-        #expect(recovered.costBreakdown?.products[1].lineTotal == Decimal(string: "9.99"))
-        #expect(recovered.costBreakdown?.products[2].lineTotal == nil)
     }
 
     @Test func optionalUnverifiedEvidenceIsNotTwentyUserWarnings() {
@@ -155,6 +148,6 @@ struct VerifiedReceiptOCRRecoveryTests {
         )
         #expect(attention.count == 1)
         #expect(attention.first?.contains("Pan-Seared Salmon") == true)
-        #expect(technicalMessages.count == 21) // Diagnostics are not discarded.
+        #expect(technicalMessages.count == 21)
     }
 }

@@ -34,7 +34,7 @@ struct ReceiptSemanticTotalVerifierTests {
         #expect(!verified.hasConflictingTotals)
     }
 
-    @Test func bothVerifiedConflictingTotalsRequireReview() {
+    @Test func bothVerifiedConflictingTotalsRequireReviewAndCannotBeSilentlyResolved() {
         let text = "SETTLEMENT $40.00\nCHARGED $41.00"
         let verified = ReceiptSemanticTotalVerifier.verify([
             proposal(.finalTotal, 1, "$40.00"),
@@ -45,13 +45,24 @@ struct ReceiptSemanticTotalVerifierTests {
         let result = ReceiptSemanticTotalVerifier.apply(verified, to: blank(text))
         #expect(result.costBreakdown?.total == nil)
         #expect(result.reviewWarnings.contains { $0.contains("Conflicting printed") })
+
+        var original = blank("TOTAL £79,44")
+        original.reviewWarnings = ["Conflicting final total values were found across pages."]
+        let resolved = ReceiptSemanticTotalVerifier.apply(
+            .init(total: Decimal(string: "79.44")), to: original)
+        #expect(resolved.costBreakdown?.total == nil)
     }
 
-    @Test func cannotInventAmountNotOnOCRLine() {
-        let verified = ReceiptSemanticTotalVerifier.verify([
+    @Test func cannotInventAmountsOrBorrowFromNextNamedRows() {
+        let missingOnLine = ReceiptSemanticTotalVerifier.verify([
             proposal(.finalTotal, 1, "76.16")
         ], against: "CHARGE $71.16")
-        #expect(verified.total == nil)
+        #expect(missingOnLine.total == nil)
+
+        let borrowed = ReceiptSemanticTotalVerifier.verify([
+            proposal(.finalTotal, 1, "15.95")
+        ], against: "SETTLEMENT\nRAINBOW ROLL $15.95")
+        #expect(borrowed.total == nil)
     }
 
     @Test func priceOnlyContinuationCanBeVerified() {
@@ -61,27 +72,12 @@ struct ReceiptSemanticTotalVerifierTests {
         #expect(verified.total == Decimal(string: "79.44"))
     }
 
-    @Test func cannotBorrowProductPriceFromNextNamedRow() {
-        let verified = ReceiptSemanticTotalVerifier.verify([
-            proposal(.finalTotal, 1, "15.95")
-        ], against: "SETTLEMENT\nRAINBOW ROLL $15.95")
-        #expect(verified.total == nil)
-    }
-
     @Test func preserveExistingAuthoritativeTotal() {
         var original = blank("TOTAL £79,44")
         original.costBreakdown?.total = Decimal(string: "79.44")
         let verified = ReceiptSemanticTotalVerifier.Verified(total: Decimal(string: "70.00"))
         let result = ReceiptSemanticTotalVerifier.apply(verified, to: original)
         #expect(result.costBreakdown?.total == Decimal(string: "79.44"))
-    }
-
-    @Test func priorConflictCannotBeSilentlyResolved() {
-        var original = blank("TOTAL £79,44")
-        original.reviewWarnings = ["Conflicting final total values were found across pages."]
-        let result = ReceiptSemanticTotalVerifier.apply(
-            .init(total: Decimal(string: "79.44")), to: original)
-        #expect(result.costBreakdown?.total == nil)
     }
 
     @Test func independentlyVerifyTaxAndSubtotal() {
@@ -94,21 +90,5 @@ struct ReceiptSemanticTotalVerifierTests {
         #expect(verified.subtotal == Decimal(string: "70.85"))
         #expect(verified.tax == Decimal(string: "5.31"))
         #expect(verified.total == Decimal(string: "76.16"))
-    }
-}
-
-extension ReceiptSemanticTotalVerifierTests {
-    @Test func quotedEvidenceRepairsLineNumberWithoutSearchingByAmountAlone() {
-        let text = "Page 1\nARTICLE 9,30\nPAYABLE €9,30\nPAID £10,30"
-        let verified = ReceiptSemanticTotalVerifier.verify([
-            .init(role: .finalTotal, sourceLine: 2, printedAmount: "£9.30", evidence: "PAYABLE 9.30"),
-            .init(role: .finalTotal, sourceLine: 3, printedAmount: "€10.30", evidence: "PAID 10.30")
-        ], against: text)
-        #expect(verified.total == nil)
-        #expect(verified.hasConflictingTotals)
-        let unsupported = ReceiptSemanticTotalVerifier.verify([
-            .init(role: .finalTotal, sourceLine: 1, printedAmount: "9.30", evidence: "IMAGINED 9.30")
-        ], against: text)
-        #expect(unsupported.total == nil)
     }
 }

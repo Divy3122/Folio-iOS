@@ -37,19 +37,17 @@ struct ReceiptProductEvidenceVerifierTests {
         #expect(found.first?.product.lineTotal == Decimal(string: "17.90"))
     }
 
-    @Test func nextProductsPriceCannotBeBorrowed() {
-        let found = ReceiptProductEvidenceVerifier.verify([
+    @Test func nextProductsPriceAndUnsupportedAmountsAreRejected() {
+        let borrowed = ReceiptProductEvidenceVerifier.verify([
             propose("Pan-Seared Salmon", at: 1, price: "21,50")
         ], lines: ["Pan-Seared Salmon w/", "Ribeye Steak £21,50"], startLine: 1)
-        #expect(found.isEmpty)
-    }
+        #expect(borrowed.isEmpty)
 
-    @Test func unsupportedAmountAndMetadataAreRejected() {
-        let found = ReceiptProductEvidenceVerifier.verify([
+        let unsupported = ReceiptProductEvidenceVerifier.verify([
             propose("Ribeye Steak", at: 1, price: "20,50"),
             propose("TOTAL", at: 2, price: "79,44")
         ], lines: ["Ribeye Steak £21,50", "Total £79,44"], startLine: 1)
-        #expect(found.isEmpty)
+        #expect(unsupported.isEmpty)
     }
 
     @Test func partialRecoveryDoesNotRequireReceiptTotalsToReconcile() {

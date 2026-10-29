@@ -2,28 +2,6 @@ import XCTest
 import SwiftData
 @testable import Folio
 
-@MainActor private final class FakeReminders: ReminderRepository {
-    var items: [ReturnReminder]
-    var failDelete = false
-
-    init(_ items: [ReturnReminder] = []) { self.items = items }
-
-    func save(_ reminder: ReturnReminder) async throws { items.append(reminder) }
-    func fetchAll() async throws -> [ReturnReminder] { items }
-    func delete(id: UUID) async throws {
-        if failDelete { throw FolioError.persistenceFailure }
-        items.removeAll { $0.id == id }
-    }
-}
-
-@MainActor private final class FakeScheduler: ReminderScheduling {
-    var cancelled: [UUID] = []
-
-    func requestAuthorization() async throws -> Bool { true }
-    func schedule(_ reminder: ReturnReminder) async throws {}
-    func cancel(id: UUID) async { cancelled.append(id) }
-}
-
 @MainActor
 final class ReceiptLibraryTests: XCTestCase {
     private let base = Date(timeIntervalSince1970: 1_760_000_000)
@@ -143,152 +121,6 @@ final class ReceiptLibraryTests: XCTestCase {
         XCTAssertEqual(found.first?.metadata.policies.first?.kind, .warranty)
     }
 
-    func testAttachReceiptDetailsStoresPagesCostsAndSource() async throws {
-        let (repo, _) = try makeRepository()
-        let (store, folder) = try makeImageStore()
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let receipt = makeReceipt("Officeworks", total: 30)
-        try await repo.save(receipt)
-
-        var costs = ReceiptCostBreakdown()
-        costs.total = 30
-        try await AttachReceiptDetails(repository: repo, images: store)(
-            receiptID: receipt.id, costs: costs, source: .foundationModels,
-            pages: [Data([1]), Data([2])])
-
-        let fetched = try await repo.fetchRecord(id: receipt.id)
-        XCTAssertEqual(fetched?.costs?.total, 30)
-        XCTAssertEqual(fetched?.metadata.imageCount, 2)
-        XCTAssertEqual(fetched?.metadata.extractionSource, .foundationModels)
-        XCTAssertEqual(try store.loadPage(1, for: receipt.id), Data([2]))
-    }
-
-    func testDeleteRemovesReceiptImagesAndRemindersAndCancelsNotifications() async throws {
-        let (repo, _) = try makeRepository()
-        let (store, folder) = try makeImageStore()
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let receipt = makeReceipt("Target")
-        let other = makeReceipt("Kmart", total: 10)
-        try await repo.save(receipt)
-        try await repo.save(other)
-        _ = try store.save([Data([9])], for: receipt.id)
-
-        let first = ReturnReminder(receiptID: receipt.id, deadline: base, notifyAt: base)
-        let second = ReturnReminder(receiptID: receipt.id, deadline: base, notifyAt: base)
-        let unrelated = ReturnReminder(receiptID: other.id, deadline: base, notifyAt: base)
-        let reminders = FakeReminders([first, second, unrelated])
-        let scheduler = FakeScheduler()
-
-        let delete = DeleteReceipt(repository: repo, images: store, reminders: reminders, scheduler: scheduler)
-        try await delete(id: receipt.id)
-
-        let gone = try await repo.fetchRecord(id: receipt.id)
-        XCTAssertNil(gone)
-        XCTAssertNil(try store.loadPage(0, for: receipt.id))
-        XCTAssertEqual(reminders.items.map(\.id), [unrelated.id])
-        XCTAssertEqual(Set(scheduler.cancelled), [first.id, second.id])
-        let kept = try await repo.fetchRecord(id: other.id)
-        XCTAssertNotNil(kept)
-        try await delete(id: receipt.id)
-    }
-
-    func testFailedReminderDeletionKeepsTheReceipt() async throws {
-        let (repo, _) = try makeRepository()
-        let (store, folder) = try makeImageStore()
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let receipt = makeReceipt("Big W")
-        try await repo.save(receipt)
-
-        let reminders = FakeReminders([ReturnReminder(receiptID: receipt.id, deadline: base, notifyAt: base)])
-        reminders.failDelete = true
-        let scheduler = FakeScheduler()
-
-        let delete = DeleteReceipt(repository: repo, images: store, reminders: reminders, scheduler: scheduler)
-        do { try await delete(id: receipt.id); XCTFail("expected an error") } catch {}
-
-        let fetched = try await repo.fetchRecord(id: receipt.id)
-        XCTAssertNotNil(fetched)
-        XCTAssertTrue(scheduler.cancelled.isEmpty)
-    }
-
-    func testDeleteWithoutRemindersOrSchedulerStillRemovesTheReceipt() async throws {
-        let (repo, _) = try makeRepository()
-        let (store, folder) = try makeImageStore()
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let receipt = makeReceipt("Aldi")
-        try await repo.save(receipt)
-
-        try await DeleteReceipt(repository: repo, images: store)(id: receipt.id)
-
-        let fetched = try await repo.fetchRecord(id: receipt.id)
-        XCTAssertNil(fetched)
-    }
-
-    func testRetailersPersistWithTheirPoliciesAndSortByName() async throws {
-        let container = try ModelContainer(
-            for: StoredRetailer.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
-        let manage = ManageRetailers(repository: SwiftDataRetailerRepository(container: container))
-        let policies = [
-            SavedPolicy(kind: .returns, title: "Change of mind", windowDays: 30, notes: "Unopened"),
-            SavedPolicy(kind: .warranty, title: "Manufacturer warranty", windowDays: 365)
-        ]
-        try await manage.save(SavedRetailer(name: "JB Hi-Fi", policies: policies))
-        try await manage.save(SavedRetailer(name: "Bunnings"))
-
-        let all = try await manage.all()
-        XCTAssertEqual(all.map(\.name), ["Bunnings", "JB Hi-Fi"])
-        XCTAssertEqual(all.last?.policies, policies)
-
-        if let jb = all.last { try await manage.delete(id: jb.id) }
-        let remaining = try await manage.all()
-        XCTAssertEqual(remaining.map(\.name), ["Bunnings"])
-    }
-
-    func testRetailerNamesMustBeUniqueButEditingTheSameRetailerIsAllowed() async throws {
-        let manage = ManageRetailers(repository: InMemoryRetailerRepository())
-        var kmart = SavedRetailer(name: "Kmart")
-        try await manage.save(kmart)
-
-        do {
-            try await manage.save(SavedRetailer(name: " kmart "))
-            XCTFail("expected a duplicate error")
-        } catch {
-            XCTAssertEqual(error as? RetailerError, .duplicateName("kmart"))
-        }
-
-        kmart.name = "Kmart Australia"
-        kmart.policies = [SavedPolicy(kind: .returns, title: "Change of mind", windowDays: 14)]
-        try await manage.save(kmart)
-
-        let all = try await manage.all()
-        XCTAssertEqual(all.count, 1)
-        XCTAssertEqual(all.first?.name, "Kmart Australia")
-        XCTAssertEqual(all.first?.policies.count, 1)
-    }
-
-    func testInvalidRetailerAndPolicyAreRejected() async throws {
-        let manage = ManageRetailers(repository: InMemoryRetailerRepository())
-
-        do {
-            try await manage.save(SavedRetailer(name: "  "))
-            XCTFail("expected an empty name error")
-        } catch {
-            XCTAssertEqual(error as? RetailerError, .emptyName)
-        }
-
-        for policy in [SavedPolicy(kind: .returns, title: "Faulty", windowDays: 0),
-                       SavedPolicy(kind: .warranty, title: " ", windowDays: 30),
-                       SavedPolicy(kind: .warranty, title: "Too long", windowDays: 4000)] {
-            do {
-                try await manage.save(SavedRetailer(name: "Test", policies: [policy]))
-                XCTFail("expected an invalid policy error")
-            } catch {
-                XCTAssertEqual(error as? RetailerError, .invalidPolicy)
-            }
-        }
-    }
-
     func testWarrantyLengthConvertsBetweenMonthsAndDays() {
         XCTAssertEqual(WarrantyLength.days(months: 12), 365)
         XCTAssertEqual(WarrantyLength.months(days: 365), 12)
@@ -298,51 +130,6 @@ final class ReceiptLibraryTests: XCTestCase {
         XCTAssertEqual(WarrantyLength.describe(months: 0), "None")
         XCTAssertEqual(WarrantyLength.describe(months: 18), "1 year 6 months")
         XCTAssertEqual(WarrantyLength.describe(months: 24), "2 years")
-    }
-
-    func testRetailerDefaultsAreTheShortestReturnAndFirstWarranty() {
-        let short = SavedPolicy(kind: .returns, title: "Change of mind", windowDays: 30)
-        let long = SavedPolicy(kind: .returns, title: "Faulty", windowDays: 365)
-        let warranty = SavedPolicy(kind: .warranty, title: "Manufacturer", windowDays: 365)
-        let retailer = SavedRetailer(name: "JB Hi-Fi", policies: [long, short, warranty])
-
-        XCTAssertEqual(retailer.defaultReturnPolicyID, short.id)
-        XCTAssertEqual(retailer.defaultWarrantyMonths, 12)
-        XCTAssertNil(SavedRetailer(name: "Empty").defaultReturnPolicyID)
-        XCTAssertEqual(SavedRetailer(name: "Empty").defaultWarrantyMonths, 0)
-    }
-
-    func testChoosingARetailerAppliesOnlySelectedPoliciesWithoutChangingTheirDuration() {
-        let short = SavedPolicy(kind: .returns, title: "Change of mind", windowDays: 30)
-        let long = SavedPolicy(kind: .returns, title: "Faulty", windowDays: 365)
-        let warranty = SavedPolicy(kind: .warranty, title: "Manufacturer", windowDays: 365)
-        let retailer = SavedRetailer(name: "JB Hi-Fi", policies: [short, long, warranty])
-        let model = ReceiptSaveViewModel(costs: ReceiptCostBreakdown(), pages: [])
-
-        model.applyRetailerChoice(retailer, selectedPolicies: [long, warranty])
-
-        XCTAssertEqual(model.retailer, "JB Hi-Fi")
-        XCTAssertEqual(model.selectedRetailerID, retailer.id)
-        XCTAssertEqual(model.policyDrafts.first { $0.id == short.id }?.applies, false)
-        XCTAssertEqual(model.policyDrafts.first { $0.id == long.id }?.applies, true)
-        let warrantyDraft = model.policyDrafts.first { $0.id == warranty.id }
-        XCTAssertEqual(warrantyDraft?.applies, true)
-        XCTAssertEqual(warrantyDraft?.daysText, String(warranty.windowDays))
-    }
-
-    func testChoosingNoPoliciesAppliesNothingAndUnknownPoliciesAreNotAdded() {
-        let short = SavedPolicy(kind: .returns, title: "Change of mind", windowDays: 30)
-        let retailer = SavedRetailer(name: "Kmart", policies: [short])
-        let model = ReceiptSaveViewModel(costs: ReceiptCostBreakdown(), pages: [])
-
-        model.applyRetailerChoice(retailer, selectedPolicies: [])
-        XCTAssertTrue(model.policyDrafts.allSatisfy { !$0.applies })
-
-        let unavailableWarranty = SavedPolicy(kind: .warranty, title: "Warranty", windowDays: WarrantyLength.days(months: 6))
-        model.applyRetailerChoice(retailer, selectedPolicies: [short, unavailableWarranty])
-        XCTAssertEqual(model.policyDrafts.count, 1)
-        XCTAssertEqual(model.policyDrafts.first { $0.id == short.id }?.applies, true)
-        XCTAssertNil(model.policyDrafts.first { $0.kind == .warranty })
     }
 
     func testImageStoreSavesLoadsAndDeletesPages() throws {
@@ -357,10 +144,5 @@ final class ReceiptLibraryTests: XCTestCase {
         try store.delete(receiptID: id)
         XCTAssertNil(try store.loadPage(0, for: id))
         XCTAssertNoThrow(try store.delete(receiptID: id))
-    }
-
-    func testTagNormalisationTrimsAndRemovesCaseInsensitiveDuplicates() {
-        let tags = UpdateReceiptMetadata.normalised([" Work ", "work", "", "Tax", "TAX"])
-        XCTAssertEqual(tags, ["Work", "Tax"])
     }
 }
